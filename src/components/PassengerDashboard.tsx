@@ -512,6 +512,36 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
             </div>
           )}
 
+          {/* Online Drivers Cross-Device Status Strip */}
+          {(() => {
+            const onlineDrivers = transitStore.getOnlineDrivers();
+            if (onlineDrivers.length === 0) return null;
+            return (
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/50 via-slate-900 to-emerald-950/50 border border-emerald-500/40 text-xs flex flex-wrap items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-center gap-2.5">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                  <div>
+                    <div className="font-bold text-white flex items-center gap-2">
+                      <span>السائقون المتصلون الآن من أجهزتهم ({onlineDrivers.length})</span>
+                      <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-700 px-1.5 py-0.2 rounded font-bold">بث حي 🟢</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 flex flex-wrap items-center gap-2.5">
+                      {onlineDrivers.map(d => (
+                        <span key={d.sessionId} className="text-emerald-300 font-semibold flex items-center gap-1">
+                          <Bus className="w-3 h-3 text-amber-400" />
+                          <span>الكابتن {d.userName} ({d.deviceName})</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div className="text-[10px] text-emerald-400 font-mono bg-emerald-950/80 px-2 py-1 rounded-lg border border-emerald-800">
+                  متاح للركاب فوراً ✓
+                </div>
+              </div>
+            );
+          })()}
+
           {trips
             .filter(t => t.status === 'scheduled' || t.status === 'in_progress')
             .filter(t => {
@@ -667,7 +697,15 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                             <UserIcon className="w-3.5 h-3.5 text-slate-400" />
                             <span>السائق:</span>
                           </span>
-                          <span className="font-bold text-white">{trip.driverName}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-bold text-white">{trip.driverName}</span>
+                            {transitStore.getOnlineDrivers().some(d => d.userId === trip.driverId || d.userName === trip.driverName) && (
+                              <span className="text-[9px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                <span>متصل الآن 📱</span>
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center justify-between">
                           <span className="text-slate-400 flex items-center gap-1">

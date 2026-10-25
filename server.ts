@@ -52,19 +52,44 @@ function getTransitData() {
   try {
     if (fs.existsSync(DB_FILE)) {
       const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
-      // Ensure all mock/fake registrations and trips are permanently purged
+      if (!Array.isArray(data.deletedUserIds)) data.deletedUserIds = [];
+      if (!Array.isArray(data.deletedTripIds)) data.deletedTripIds = [];
+      if (!Array.isArray(data.deletedBookingIds)) data.deletedBookingIds = [];
+
+      // Ensure all mock/fake registrations and trips are permanently purged and banned
       if (Array.isArray(data.users)) {
-        data.users = data.users.filter(
-          (u: any) => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
-        );
+        data.users = data.users.filter((u: any) => {
+          if (u.id === 'usr-admin') return true;
+          if (
+            u.id.startsWith('usr-driver-') ||
+            u.id.startsWith('usr-pass-') ||
+            u.email === 'fahad@driver.sa' ||
+            u.email === 'ali@driver.sa' ||
+            data.deletedUserIds.includes(u.id)
+          ) {
+            if (!data.deletedUserIds.includes(u.id)) data.deletedUserIds.push(u.id);
+            return false;
+          }
+          return true;
+        });
       }
       if (data.passwords) {
         delete data.passwords['fahad@driver.sa'];
         delete data.passwords['ali@driver.sa'];
       }
+      if (data.driverLocations) {
+        delete data.driverLocations['usr-drv-test'];
+        data.deletedUserIds.forEach((id: string) => {
+          delete data.driverLocations[id];
+        });
+      }
       if (Array.isArray(data.trips)) {
         data.trips = data.trips.filter(
-          (t: any) => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+          (t: any) =>
+            t.driverId !== 'usr-driver-1' &&
+            t.driverId !== 'usr-driver-2' &&
+            !data.deletedTripIds.includes(t.id) &&
+            !data.deletedUserIds.includes(t.driverId)
         );
       }
       return data;
@@ -87,17 +112,147 @@ function saveTransitDataToFile() {
   }
 }
 
+// --- Real-time Presence & Server-Sent Events (SSE) for Cross-Device Synchronization ---
+interface ActivePresence {
+  sessionId: string;
+  userId?: string;
+  userName: string;
+  role: 'driver' | 'passenger' | 'admin' | 'visitor';
+  deviceType: 'mobile' | 'tablet' | 'desktop';
+  deviceName: string;
+  ip?: string;
+  city?: string;
+  lastSeen: string;
+  isOnline: boolean;
+  statusText?: string;
+  coords?: {
+    lat: number;
+    lng: number;
+  };
+  activeTripId?: string;
+}
+
+const sseClients: Set<Response> = new Set();
+const activePresenceMap: Map<string, ActivePresence> = new Map();
+
+function broadcastSseEvent(eventType: string, payload: any) {
+  const message = `event: ${eventType}\ndata: ${JSON.stringify(payload)}\n\n`;
+  sseClients.forEach(client => {
+    try {
+      client.write(message);
+    } catch {
+      sseClients.delete(client);
+    }
+  });
+}
+
+function cleanStalePresence() {
+  const now = Date.now();
+  let changed = false;
+  activePresenceMap.forEach((p, id) => {
+    const elapsed = now - new Date(p.lastSeen).getTime();
+    if (elapsed > 40000) {
+      activePresenceMap.delete(id);
+      changed = true;
+    }
+  });
+  if (changed) {
+    broadcastSseEvent('presence', getActivePresenceList());
+  }
+}
+
+setInterval(cleanStalePresence, 8000);
+
+function getActivePresenceList(): ActivePresence[] {
+  const now = Date.now();
+  const list: ActivePresence[] = [];
+  activePresenceMap.forEach(p => {
+    if (now - new Date(p.lastSeen).getTime() <= 40000) {
+      list.push({ ...p, isOnline: true });
+    }
+  });
+  return list.sort((a, b) => new Date(b.lastSeen).getTime() - new Date(a.lastSeen).getTime());
+}
+
+// Live SSE Stream for Sub-Second Multi-Device Event Delivery
+app.get('/api/transit/events', (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  sseClients.add(res);
+
+  // Send initial presence & state event immediately
+  res.write(`event: init\ndata: ${JSON.stringify({ state: serverTransitData, presence: getActivePresenceList() })}\n\n`);
+
+  _req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
+
+// Presence Heartbeat Endpoint: Called by devices when active
+app.post('/api/transit/presence', (req: Request, res: Response) => {
+  try {
+    const { sessionId, userId, userName, role, deviceType, deviceName, coords, activeTripId, statusText } = req.body;
+    if (!sessionId) {
+      return res.status(400).json({ error: 'sessionId required' });
+    }
+
+    const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    const now = new Date().toISOString();
+
+    const presence: ActivePresence = {
+      sessionId,
+      userId,
+      userName: userName || 'زائر في الأحساء',
+      role: role || 'visitor',
+      deviceType: deviceType || 'mobile',
+      deviceName: deviceName || 'هاتف ذكي',
+      ip: clientIp || 'Al-Ahsa',
+      city: 'الأحساء',
+      lastSeen: now,
+      isOnline: true,
+      statusText: statusText || (role === 'driver' ? 'كابتن حافلة متصل الآن 🟢' : role === 'admin' ? 'إدارة العمليات 🛡️' : 'راكب متصل 🟢'),
+      coords,
+      activeTripId
+    };
+
+    activePresenceMap.set(sessionId, presence);
+    const updatedList = getActivePresenceList();
+    broadcastSseEvent('presence', updatedList);
+
+    return res.json({ success: true, activePresence: updatedList });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message });
+  }
+});
+
+app.get('/api/transit/presence', (_req: Request, res: Response) => {
+  cleanStalePresence();
+  return res.json({ success: true, activePresence: getActivePresenceList() });
+});
+
+app.post('/api/transit/presence/leave', (req: Request, res: Response) => {
+  const { sessionId } = req.body;
+  if (sessionId && activePresenceMap.has(sessionId)) {
+    activePresenceMap.delete(sessionId);
+    broadcastSseEvent('presence', getActivePresenceList());
+  }
+  return res.json({ success: true });
+});
+
 app.get('/api/transit/state', (_req: Request, res: Response) => {
   if (!serverTransitData) {
     serverTransitData = getTransitData();
   }
-  res.json({ success: true, data: serverTransitData });
+  res.json({ success: true, data: serverTransitData, activePresence: getActivePresenceList() });
 });
 
 // Authoritative Multi-Device Login Endpoint
 app.post('/api/transit/login', (req: Request, res: Response) => {
   try {
-    const { identifier, password, role } = req.body;
+    const { identifier, password, role, sessionId, deviceType, deviceName } = req.body;
     if (!identifier || !password) {
       return res.status(400).json({ error: 'يرجى إدخال اسم المستخدم وكلمة المرور' });
     }
@@ -145,7 +300,29 @@ app.post('/api/transit/login', (req: Request, res: Response) => {
       return res.status(403).json({ error: 'تم رفض طلب هذا الحساب من قبل الإدارة' });
     }
 
-    return res.json({ success: true, user });
+    // Register active presence immediately across all devices!
+    if (sessionId) {
+      const clientIp = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+      const presence: ActivePresence = {
+        sessionId,
+        userId: user.id,
+        userName: user.name,
+        role: user.role,
+        deviceType: deviceType || 'mobile',
+        deviceName: deviceName || 'هاتف ذكي',
+        ip: clientIp || 'Al-Ahsa',
+        city: 'الأحساء',
+        lastSeen: new Date().toISOString(),
+        isOnline: true,
+        statusText: user.role === 'driver' ? 'كابتن حافلة متصل الآن 🟢' : user.role === 'admin' ? 'مسؤول إدارة العمليات 🛡️' : 'راكب متصل الآن 👤'
+      };
+      activePresenceMap.set(sessionId, presence);
+      broadcastSseEvent('presence', getActivePresenceList());
+    }
+
+    broadcastSseEvent('login', { user, activePresence: getActivePresenceList() });
+
+    return res.json({ success: true, user, activePresence: getActivePresenceList() });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Server error during login' });
   }
@@ -181,6 +358,7 @@ app.post('/api/transit/register', (req: Request, res: Response) => {
     }
 
     saveTransitDataToFile();
+    broadcastSseEvent('user:register', { user });
     return res.json({ success: true, user, totalUsers: serverTransitData.users.length });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Error registering user' });
@@ -247,72 +425,274 @@ app.post('/api/transit/driver-gps', (req: Request, res: Response) => {
     }
 
     saveTransitDataToFile();
+    broadcastSseEvent('gps', { tripId, driverId, currentLocation: locData, tripUpdated: !!trip });
     return res.json({ success: true, currentLocation: locData, tripUpdated: !!trip });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message });
   }
 });
 
-// Purge Mock Registrations Endpoint
+// Authoritative Permanent User Deletion (Drivers & Passengers)
+app.post('/api/transit/delete-user', (req: Request, res: Response) => {
+  try {
+    const { userId } = req.body;
+    if (!userId || userId === 'usr-admin') {
+      return res.status(400).json({ error: 'معرف المستخدم غير صالح أو لا يمكن حذف مسؤول النظام الرئيسي' });
+    }
+    if (!serverTransitData) serverTransitData = getTransitData();
+    if (!Array.isArray(serverTransitData.deletedUserIds)) {
+      serverTransitData.deletedUserIds = [];
+    }
+    if (!serverTransitData.deletedUserIds.includes(userId)) {
+      serverTransitData.deletedUserIds.push(userId);
+    }
+
+    const targetUser = (serverTransitData.users || []).find((u: any) => u.id === userId);
+
+    // 1. Remove user permanently
+    serverTransitData.users = (serverTransitData.users || []).filter((u: any) => u.id !== userId);
+
+    // 2. Remove credentials
+    if (serverTransitData.passwords) {
+      if (targetUser?.email) delete serverTransitData.passwords[targetUser.email];
+      if (targetUser?.phone) delete serverTransitData.passwords[targetUser.phone];
+    }
+
+    // 3. Remove driver physical locations
+    if (serverTransitData.driverLocations) {
+      delete serverTransitData.driverLocations[userId];
+    }
+
+    // 4. Remove live active presence
+    activePresenceMap.forEach((p, sessId) => {
+      if (p.userId === userId) {
+        activePresenceMap.delete(sessId);
+      }
+    });
+
+    // 5. Remove or cancel associated trips
+    const removedTripIds: string[] = [];
+    serverTransitData.trips = (serverTransitData.trips || []).filter((t: any) => {
+      if (t.driverId === userId) {
+        removedTripIds.push(t.id);
+        return false;
+      }
+      return true;
+    });
+
+    if (!Array.isArray(serverTransitData.deletedTripIds)) {
+      serverTransitData.deletedTripIds = [];
+    }
+    removedTripIds.forEach(tId => {
+      if (!serverTransitData.deletedTripIds.includes(tId)) {
+        serverTransitData.deletedTripIds.push(tId);
+      }
+    });
+
+    // 6. Remove associated bookings
+    serverTransitData.bookings = (serverTransitData.bookings || []).filter((b: any) => {
+      return b.passengerId !== userId && !removedTripIds.includes(b.tripId);
+    });
+
+    saveTransitDataToFile();
+    broadcastSseEvent('user:deleted', { userId, deletedTripIds: removedTripIds });
+    broadcastSseEvent('presence', getActivePresenceList());
+    broadcastSseEvent('state', serverTransitData);
+
+    return res.json({ success: true, userId, remainingUsers: serverTransitData.users.length });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Server error deleting user' });
+  }
+});
+
+// Authoritative Permanent Trip Deletion
+app.post('/api/transit/delete-trip', (req: Request, res: Response) => {
+  try {
+    const { tripId } = req.body;
+    if (!tripId) {
+      return res.status(400).json({ error: 'معرف الرحلة مفقود' });
+    }
+    if (!serverTransitData) serverTransitData = getTransitData();
+    if (!Array.isArray(serverTransitData.deletedTripIds)) {
+      serverTransitData.deletedTripIds = [];
+    }
+    if (!serverTransitData.deletedTripIds.includes(tripId)) {
+      serverTransitData.deletedTripIds.push(tripId);
+    }
+
+    serverTransitData.trips = (serverTransitData.trips || []).filter((t: any) => t.id !== tripId);
+
+    // Cancel remaining bookings for this trip
+    (serverTransitData.bookings || []).forEach((b: any) => {
+      if (b.tripId === tripId && b.status !== 'boarded') {
+        b.status = 'cancelled';
+      }
+    });
+
+    saveTransitDataToFile();
+    broadcastSseEvent('trip:deleted', { tripId });
+    broadcastSseEvent('state', serverTransitData);
+
+    return res.json({ success: true, tripId });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Server error deleting trip' });
+  }
+});
+
+// Purge Mock Registrations Endpoint (Permanent ban of all fake/mock users)
 app.post('/api/transit/purge-mock-data', (_req: Request, res: Response) => {
   try {
     if (!serverTransitData) serverTransitData = getTransitData();
+    if (!Array.isArray(serverTransitData.deletedUserIds)) serverTransitData.deletedUserIds = [];
+    if (!Array.isArray(serverTransitData.deletedTripIds)) serverTransitData.deletedTripIds = [];
+
+    // Identify mock and test user IDs
+    const mockUserIds = (serverTransitData.users || [])
+      .filter((u: any) =>
+        u.id !== 'usr-admin' && (
+          u.id.startsWith('usr-driver-') ||
+          u.id.startsWith('usr-pass-') ||
+          u.email === 'fahad@driver.sa' ||
+          u.email === 'ali@driver.sa' ||
+          u.name?.includes('وهمي') ||
+          u.name?.includes('افتراضي') ||
+          u.name?.includes('تجريبي')
+        )
+      )
+      .map((u: any) => u.id);
+
+    // Hardcode known mock IDs into permanent ban list
+    ['usr-driver-1', 'usr-driver-2', 'usr-pass-1', 'usr-drv-test'].forEach(id => {
+      if (!mockUserIds.includes(id)) mockUserIds.push(id);
+    });
+
+    mockUserIds.forEach((id: string) => {
+      if (!serverTransitData.deletedUserIds.includes(id)) {
+        serverTransitData.deletedUserIds.push(id);
+      }
+    });
+
     serverTransitData.users = (serverTransitData.users || []).filter(
-      (u: any) => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+      (u: any) => !serverTransitData.deletedUserIds.includes(u.id)
     );
+
     if (serverTransitData.passwords) {
       delete serverTransitData.passwords['fahad@driver.sa'];
       delete serverTransitData.passwords['ali@driver.sa'];
     }
+
+    if (serverTransitData.driverLocations) {
+      delete serverTransitData.driverLocations['usr-drv-test'];
+      mockUserIds.forEach((id: string) => {
+        delete serverTransitData.driverLocations[id];
+      });
+    }
+
+    const mockTripIds = (serverTransitData.trips || [])
+      .filter((t: any) => t.driverId === 'usr-driver-1' || t.driverId === 'usr-driver-2' || mockUserIds.includes(t.driverId))
+      .map((t: any) => t.id);
+
+    mockTripIds.forEach((tId: string) => {
+      if (!serverTransitData.deletedTripIds.includes(tId)) {
+        serverTransitData.deletedTripIds.push(tId);
+      }
+    });
+
     serverTransitData.trips = (serverTransitData.trips || []).filter(
-      (t: any) => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+      (t: any) => !serverTransitData.deletedTripIds.includes(t.id)
     );
+
+    serverTransitData.bookings = (serverTransitData.bookings || []).filter(
+      (b: any) => !mockUserIds.includes(b.passengerId) && !mockTripIds.includes(b.tripId)
+    );
+
     saveTransitDataToFile();
-    return res.json({ success: true, remainingUsers: serverTransitData.users.length });
+    broadcastSseEvent('state', serverTransitData);
+    return res.json({ success: true, remainingUsers: serverTransitData.users.length, purgedUserIds: mockUserIds });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message });
   }
 });
 
-// Intelligent Merged State Save (Never overwrites or deletes other devices' data)
+// Intelligent Merged State Save with Absolute Tombstone Enforcement
 app.post('/api/transit/state', (req: Request, res: Response) => {
   try {
     const incomingData = req.body;
     if (incomingData && typeof incomingData === 'object') {
       if (!serverTransitData) serverTransitData = getTransitData();
 
-      // 1. Merge users: NEVER lose any user
+      // Merge and consolidate all tombstones from server and incoming client state
+      const tombstoneUsers = new Set<string>([
+        ...(serverTransitData.deletedUserIds || []),
+        ...(incomingData.deletedUserIds || [])
+      ]);
+      const tombstoneTrips = new Set<string>([
+        ...(serverTransitData.deletedTripIds || []),
+        ...(incomingData.deletedTripIds || [])
+      ]);
+      const tombstoneBookings = new Set<string>([
+        ...(serverTransitData.deletedBookingIds || []),
+        ...(incomingData.deletedBookingIds || [])
+      ]);
+
+      serverTransitData.deletedUserIds = Array.from(tombstoneUsers);
+      serverTransitData.deletedTripIds = Array.from(tombstoneTrips);
+      serverTransitData.deletedBookingIds = Array.from(tombstoneBookings);
+
+      // 1. Merge users: Filter OUT any tombstone user and mock registrations
       const userMap = new Map();
-      (serverTransitData.users || []).forEach((u: any) => userMap.set(u.id, u));
-      (incomingData.users || []).forEach((u: any) => userMap.set(u.id, u));
+      (serverTransitData.users || []).forEach((u: any) => {
+        if (!tombstoneUsers.has(u.id) && !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-')) {
+          userMap.set(u.id, u);
+        }
+      });
+      (incomingData.users || []).forEach((u: any) => {
+        if (!tombstoneUsers.has(u.id) && !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-')) {
+          userMap.set(u.id, u);
+        }
+      });
       serverTransitData.users = Array.from(userMap.values());
 
-      // 2. Merge bookings: NEVER lose any booking
+      // 2. Merge bookings: Filter OUT bookings belonging to tombstoned users or deleted trips
       const bookingMap = new Map();
-      (serverTransitData.bookings || []).forEach((b: any) => bookingMap.set(b.id, b));
-      (incomingData.bookings || []).forEach((b: any) => bookingMap.set(b.id, b));
+      (serverTransitData.bookings || []).forEach((b: any) => {
+        if (!tombstoneBookings.has(b.id) && !tombstoneUsers.has(b.passengerId) && !tombstoneTrips.has(b.tripId)) {
+          bookingMap.set(b.id, b);
+        }
+      });
+      (incomingData.bookings || []).forEach((b: any) => {
+        if (!tombstoneBookings.has(b.id) && !tombstoneUsers.has(b.passengerId) && !tombstoneTrips.has(b.tripId)) {
+          bookingMap.set(b.id, b);
+        }
+      });
       serverTransitData.bookings = Array.from(bookingMap.values());
 
-      // 3. Merge trips: keep latest location if active
+      // 3. Merge trips: Filter OUT tombstoned trips or trips belonging to tombstoned drivers
       const tripMap = new Map();
-      (serverTransitData.trips || []).forEach((t: any) => tripMap.set(t.id, t));
-      (incomingData.trips || []).forEach((t: any) => {
-        const existing = tripMap.get(t.id);
-        if (existing) {
-          const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
-          const incomingTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
-          const mergedLoc = incomingTime >= existingTime ? (t.currentLocation || existing.currentLocation) : (existing.currentLocation || t.currentLocation);
-          const mergedStatus = (t.status === 'cancelled' || t.status === 'completed')
-            ? t.status
-            : (existing.status === 'cancelled' || existing.status === 'completed' ? existing.status : t.status);
-          tripMap.set(t.id, {
-            ...existing,
-            ...t,
-            status: mergedStatus,
-            currentLocation: mergedLoc
-          });
-        } else {
+      (serverTransitData.trips || []).forEach((t: any) => {
+        if (!tombstoneTrips.has(t.id) && !tombstoneUsers.has(t.driverId)) {
           tripMap.set(t.id, t);
+        }
+      });
+      (incomingData.trips || []).forEach((t: any) => {
+        if (!tombstoneTrips.has(t.id) && !tombstoneUsers.has(t.driverId)) {
+          const existing = tripMap.get(t.id);
+          if (existing) {
+            const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
+            const incomingTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
+            const mergedLoc = incomingTime >= existingTime ? (t.currentLocation || existing.currentLocation) : (existing.currentLocation || t.currentLocation);
+            const mergedStatus = (t.status === 'cancelled' || t.status === 'completed')
+              ? t.status
+              : (existing.status === 'cancelled' || existing.status === 'completed' ? existing.status : t.status);
+            tripMap.set(t.id, {
+              ...existing,
+              ...t,
+              status: mergedStatus,
+              currentLocation: mergedLoc
+            });
+          } else {
+            tripMap.set(t.id, t);
+          }
         }
       });
       serverTransitData.trips = Array.from(tripMap.values());
@@ -328,12 +708,15 @@ app.post('/api/transit/state', (req: Request, res: Response) => {
         ...(serverTransitData.passwords || {}),
         ...(incomingData.passwords || {})
       };
+      delete serverTransitData.passwords['fahad@driver.sa'];
+      delete serverTransitData.passwords['ali@driver.sa'];
 
       if (incomingData.announcement) {
         serverTransitData.announcement = incomingData.announcement;
       }
 
       saveTransitDataToFile();
+      broadcastSseEvent('state', serverTransitData);
       return res.json({ success: true, data: serverTransitData });
     }
     return res.status(400).json({ error: 'Invalid state format' });

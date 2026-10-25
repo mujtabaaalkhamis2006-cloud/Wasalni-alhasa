@@ -7,7 +7,8 @@ import {
   SupportTicket,
   Announcement,
   AdminStats,
-  UserRole
+  UserRole,
+  ActivePresence
 } from '../types/transit';
 import {
   INITIAL_USERS,
@@ -31,6 +32,9 @@ interface StoredData {
   tickets: SupportTicket[];
   announcement: Announcement;
   passwords: Record<string, string>; // Secured passwords
+  deletedUserIds?: string[];
+  deletedTripIds?: string[];
+  deletedBookingIds?: string[];
 }
 
 class TransitStore {
@@ -38,17 +42,235 @@ class TransitStore {
   private currentUser: User | null = null;
   private listeners: Set<() => void> = new Set();
   private isSyncing = false;
+  private activePresence: ActivePresence[] = [];
+  private sessionId: string;
+  private deviceType: 'mobile' | 'tablet' | 'desktop' = 'mobile';
+  private deviceName: string = 'هاتف ذكي';
+  private sseEventSource: EventSource | null = null;
 
   constructor() {
+    const dev = this.detectDevice();
+    this.deviceType = dev.deviceType;
+    this.deviceName = dev.deviceName;
+    this.sessionId = this.initSessionId();
+
     this.data = this.loadData();
     this.currentUser = this.loadAuth();
     this.syncWithServer();
+    this.sendPresenceHeartbeat();
+    this.initRealtimeSse();
+
     if (typeof window !== 'undefined') {
-      // 3.5s balanced polling for multi-device synchronization without freezing mobile CPU
+      // 5s heartbeat to refresh presence across all connected devices
+      setInterval(() => {
+        this.sendPresenceHeartbeat();
+      }, 5000);
+
+      // 4s polling fallback in case SSE reconnects or tab wakes up
       setInterval(() => {
         this.syncWithServer();
-      }, 3500);
+      }, 4000);
+
+      window.addEventListener('beforeunload', () => {
+        try {
+          navigator.sendBeacon('/api/transit/presence/leave', JSON.stringify({ sessionId: this.sessionId }));
+        } catch {}
+      });
     }
+  }
+
+  private detectDevice(): { deviceType: 'mobile' | 'tablet' | 'desktop'; deviceName: string } {
+    if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+      return { deviceType: 'desktop', deviceName: 'متصفح ويب' };
+    }
+    const ua = navigator.userAgent || '';
+    const isTablet = /(ipad|tablet|(android(?!.*mobile))|(windows(?!.*phone)(.*touch))|kindle|playbook|silk|(puffin(?!.*(IP|AP|WP))))/i.test(ua);
+    const isMobile = /Mobile|iP(hone|od)|Android|BlackBerry|IEMobile|Kindle|NetFront|Silk-Accelerated|(hpw|web)OS|Fennec|Minimo|Opera M(obi|ini)|Blazer|Dolfin|Dolphin|Skyfire|Zune/i.test(ua);
+
+    const deviceType: 'mobile' | 'tablet' | 'desktop' = isTablet ? 'tablet' : isMobile ? 'mobile' : 'desktop';
+    let deviceName = 'جهاز متصل';
+
+    if (/iPhone/i.test(ua)) {
+      deviceName = 'آيفون (Apple iPhone) 📱';
+    } else if (/iPad/i.test(ua)) {
+      deviceName = 'آيباد (Apple iPad) 📟';
+    } else if (/Android/i.test(ua)) {
+      deviceName = isTablet ? 'تابلت أندرويد (Tablet) 📟' : 'جوال أندرويد (Android) 📱';
+    } else if (/Macintosh|Mac OS/i.test(ua)) {
+      deviceName = 'كمبيوتر ماك (Mac) 💻';
+    } else if (/Windows/i.test(ua)) {
+      deviceName = 'كمبيوتر ويندوز (PC) 💻';
+    } else if (/Linux/i.test(ua)) {
+      deviceName = 'كمبيوتر لينكس (Linux) 💻';
+    } else {
+      deviceName = isMobile ? 'هاتف ذكي 📱' : 'كمبيوتر متصفح 💻';
+    }
+
+    return { deviceType, deviceName };
+  }
+
+  private initSessionId(): string {
+    if (typeof window === 'undefined') return `ses-${Date.now()}`;
+    try {
+      let sid = sessionStorage.getItem('al_ahsa_session_id');
+      if (!sid) {
+        sid = `ses-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        sessionStorage.setItem('al_ahsa_session_id', sid);
+      }
+      return sid;
+    } catch {
+      return `ses-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    }
+  }
+
+  private initRealtimeSse() {
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+    try {
+      if (this.sseEventSource) {
+        this.sseEventSource.close();
+      }
+      this.sseEventSource = new EventSource('/api/transit/events');
+
+      this.sseEventSource.addEventListener('init', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload.presence && Array.isArray(payload.presence)) {
+            this.activePresence = payload.presence;
+          }
+          if (payload.state) {
+            this.mergeRemoteState(payload.state);
+          }
+          this.notify();
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('presence', (e: MessageEvent) => {
+        try {
+          const presence = JSON.parse(e.data);
+          if (Array.isArray(presence)) {
+            this.activePresence = presence;
+            this.notify();
+          }
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('state', (e: MessageEvent) => {
+        try {
+          const state = JSON.parse(e.data);
+          const changed = this.mergeRemoteState(state);
+          if (changed) this.notify();
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('gps', (e: MessageEvent) => {
+        try {
+          const { tripId, currentLocation } = JSON.parse(e.data);
+          if (tripId && currentLocation) {
+            const trip = this.data.trips.find(t => t.id === tripId);
+            if (trip) {
+              trip.currentLocation = currentLocation;
+              if (trip.status !== 'in_progress') trip.status = 'in_progress';
+              this.notify();
+            }
+          }
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('user:deleted', (e: MessageEvent) => {
+        try {
+          const { userId, deletedTripIds } = JSON.parse(e.data);
+          if (userId) {
+            this.handleRemoteUserDeleted(userId, deletedTripIds);
+          }
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('trip:deleted', (e: MessageEvent) => {
+        try {
+          const { tripId } = JSON.parse(e.data);
+          if (tripId) {
+            this.handleRemoteTripDeleted(tripId);
+          }
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('login', (_e: MessageEvent) => {
+        this.syncWithServer();
+      });
+
+      this.sseEventSource.onerror = () => {
+        // EventSource automatically handles reconnection
+      };
+    } catch (err) {
+      console.warn('Could not initialize SSE stream:', err);
+    }
+  }
+
+  private handleRemoteUserDeleted(userId: string, deletedTripIds?: string[]) {
+    if (!this.data.deletedUserIds) this.data.deletedUserIds = [];
+    if (!this.data.deletedUserIds.includes(userId)) this.data.deletedUserIds.push(userId);
+    this.data.users = this.data.users.filter(u => u.id !== userId);
+
+    if (Array.isArray(deletedTripIds)) {
+      if (!this.data.deletedTripIds) this.data.deletedTripIds = [];
+      deletedTripIds.forEach(tId => {
+        if (!this.data.deletedTripIds!.includes(tId)) this.data.deletedTripIds!.push(tId);
+      });
+      this.data.trips = this.data.trips.filter(t => !deletedTripIds.includes(t.id));
+      this.data.bookings = this.data.bookings.filter(b => b.passengerId !== userId && !deletedTripIds.includes(b.tripId));
+    }
+
+    if (this.currentUser?.id === userId) {
+      this.logout();
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    } catch {}
+    this.notify();
+  }
+
+  private handleRemoteTripDeleted(tripId: string) {
+    if (!this.data.deletedTripIds) this.data.deletedTripIds = [];
+    if (!this.data.deletedTripIds.includes(tripId)) this.data.deletedTripIds.push(tripId);
+    this.data.trips = this.data.trips.filter(t => t.id !== tripId);
+    this.data.bookings = this.data.bookings.filter(b => b.tripId !== tripId);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    } catch {}
+    this.notify();
+  }
+
+  public async sendPresenceHeartbeat(statusText?: string) {
+    if (typeof window === 'undefined') return;
+    try {
+      const user = this.currentUser;
+      const activeTrip = user?.role === 'driver'
+        ? this.data.trips.find(t => t.driverId === user.id && t.status === 'in_progress')
+        : null;
+
+      const res = await fetch('/api/transit/presence', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: this.sessionId,
+          userId: user?.id,
+          userName: user?.name || 'زائر في الأحساء',
+          role: user?.role || 'visitor',
+          deviceType: this.deviceType,
+          deviceName: this.deviceName,
+          activeTripId: activeTrip?.id,
+          coords: activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined,
+          statusText: statusText || (activeTrip ? `يقود رحلة (${activeTrip.routeName}) 🚌` : user?.role === 'driver' ? 'كابتن متصل ومتاح 🟢' : user?.role === 'admin' ? 'إدارة العمليات 🛡️' : 'متصل بالمنصة 🟢')
+        })
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.activePresence && Array.isArray(json.activePresence)) {
+          this.activePresence = json.activePresence;
+          this.notify();
+        }
+      }
+    } catch {}
   }
 
   private lastBroadcastStamp = 0;
@@ -136,12 +358,18 @@ class TransitStore {
       await fetch('/api/transit/purge-mock-data', { method: 'POST' });
     } catch {}
 
+    const bannedUsers = ['usr-driver-1', 'usr-driver-2', 'usr-pass-1', 'usr-drv-test'];
+    if (!this.data.deletedUserIds) this.data.deletedUserIds = [];
+    bannedUsers.forEach(id => {
+      if (!this.data.deletedUserIds!.includes(id)) this.data.deletedUserIds!.push(id);
+    });
+
     // Clean local data permanently
     this.data.users = this.data.users.filter(
-      u => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+      u => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa' && !this.data.deletedUserIds!.includes(u.id)
     );
     this.data.trips = this.data.trips.filter(
-      t => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+      t => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2' && !this.data.deletedUserIds!.includes(t.driverId)
     );
     delete this.data.passwords['fahad@driver.sa'];
     delete this.data.passwords['ali@driver.sa'];
@@ -163,6 +391,139 @@ class TransitStore {
     }
   }
 
+  public mergeRemoteState(serverData: StoredData): boolean {
+    if (!serverData || !Array.isArray(serverData.users)) return false;
+
+    // Consolidate tombstones from server and local
+    const tombstoneUsers = new Set<string>([
+      ...(this.data.deletedUserIds || []),
+      ...(serverData.deletedUserIds || [])
+    ]);
+    const tombstoneTrips = new Set<string>([
+      ...(this.data.deletedTripIds || []),
+      ...(serverData.deletedTripIds || [])
+    ]);
+    const tombstoneBookings = new Set<string>([
+      ...(this.data.deletedBookingIds || []),
+      ...(serverData.deletedBookingIds || [])
+    ]);
+
+    this.data.deletedUserIds = Array.from(tombstoneUsers);
+    this.data.deletedTripIds = Array.from(tombstoneTrips);
+    this.data.deletedBookingIds = Array.from(tombstoneBookings);
+
+    // If current logged in user has been banned/deleted, log out immediately
+    if (this.currentUser && tombstoneUsers.has(this.currentUser.id)) {
+      this.logout();
+    }
+
+    let hasChanges = false;
+
+    // Merge users - strictly omitting any deleted user, mock IDs, or mock emails
+    const userMap = new Map<string, User>();
+    this.data.users.forEach(u => {
+      if (!tombstoneUsers.has(u.id) && !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-')) {
+        userMap.set(u.id, u);
+      }
+    });
+    serverData.users.forEach(u => {
+      if (!tombstoneUsers.has(u.id) && !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa') {
+        const old = userMap.get(u.id);
+        if (!old || JSON.stringify(old) !== JSON.stringify(u)) {
+          hasChanges = true;
+        }
+        userMap.set(u.id, u);
+      }
+    });
+    const mergedUsers = Array.from(userMap.values());
+
+    // Merge passwords
+    const mergedPasswords = {
+      ...this.data.passwords,
+      ...(serverData.passwords || {})
+    };
+    delete mergedPasswords['fahad@driver.sa'];
+    delete mergedPasswords['ali@driver.sa'];
+
+    // Merge trips - strictly omitting any tombstoned trips or deleted drivers
+    const tripMap = new Map<string, Trip>();
+    this.data.trips.forEach(t => {
+      if (!tombstoneTrips.has(t.id) && !tombstoneUsers.has(t.driverId)) {
+        tripMap.set(t.id, t);
+      }
+    });
+    (serverData.trips || []).forEach(t => {
+      if (!tombstoneTrips.has(t.id) && !tombstoneUsers.has(t.driverId) && t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2') {
+        const existing = tripMap.get(t.id);
+        if (!existing) {
+          tripMap.set(t.id, t);
+          hasChanges = true;
+        } else {
+          const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
+          const serverTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
+          if (serverTime >= existingTime || existing.status !== t.status || existing.availableSeats !== t.availableSeats) {
+            tripMap.set(t.id, t);
+            hasChanges = true;
+          }
+        }
+      }
+    });
+    const mergedTrips = Array.from(tripMap.values());
+
+    // Merge bookings - strictly omitting tombstoned bookings or deleted passengers/trips
+    const bookingMap = new Map<string, Booking>();
+    this.data.bookings.forEach(b => {
+      if (!tombstoneBookings.has(b.id) && !tombstoneUsers.has(b.passengerId) && !tombstoneTrips.has(b.tripId)) {
+        bookingMap.set(b.id, b);
+      }
+    });
+    (serverData.bookings || []).forEach(b => {
+      if (!tombstoneBookings.has(b.id) && !tombstoneUsers.has(b.passengerId) && !tombstoneTrips.has(b.tripId)) {
+        const old = bookingMap.get(b.id);
+        if (!old || old.status !== b.status) {
+          hasChanges = true;
+        }
+        bookingMap.set(b.id, b);
+      }
+    });
+    const mergedBookings = Array.from(bookingMap.values());
+
+    // Merge tickets & announcement
+    const mergedTickets = serverData.tickets || this.data.tickets;
+    const mergedAnnouncement = serverData.announcement || this.data.announcement;
+
+    if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length) {
+      this.data = {
+        ...this.data,
+        users: mergedUsers,
+        passwords: mergedPasswords,
+        trips: mergedTrips,
+        bookings: mergedBookings,
+        tickets: mergedTickets,
+        announcement: mergedAnnouncement,
+        deletedUserIds: Array.from(tombstoneUsers),
+        deletedTripIds: Array.from(tombstoneTrips),
+        deletedBookingIds: Array.from(tombstoneBookings)
+      };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      } catch {}
+
+      // Sync current user status if updated remotely
+      if (this.currentUser) {
+        const freshUser = this.data.users.find(u => u.id === this.currentUser?.id);
+        if (freshUser && (freshUser.status !== this.currentUser.status || freshUser.name !== this.currentUser.name)) {
+          this.currentUser = freshUser;
+          try {
+            localStorage.setItem(AUTH_KEY, JSON.stringify(freshUser));
+          } catch {}
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
   public async syncWithServer() {
     if (typeof window === 'undefined' || this.isSyncing) return;
     this.isSyncing = true;
@@ -170,96 +531,12 @@ class TransitStore {
       const res = await fetch('/api/transit/state');
       if (res.ok) {
         const json = await res.json();
+        if (json.activePresence && Array.isArray(json.activePresence)) {
+          this.activePresence = json.activePresence;
+        }
         if (json.success && json.data && Array.isArray(json.data.users)) {
-          const serverData: StoredData = json.data;
-          
-          // Purge any residual mock drivers if server returned them
-          serverData.users = (serverData.users || []).filter(
-            u => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
-          );
-          serverData.trips = (serverData.trips || []).filter(
-            t => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
-          );
-
-          let hasChanges = false;
-
-          // Merge users from server (all registered users on other devices)
-          const userMap = new Map<string, User>();
-          this.data.users.forEach(u => userMap.set(u.id, u));
-          serverData.users.forEach(u => {
-            const old = userMap.get(u.id);
-            if (!old || JSON.stringify(old) !== JSON.stringify(u)) {
-              hasChanges = true;
-            }
-            userMap.set(u.id, u);
-          });
-          const mergedUsers = Array.from(userMap.values());
-
-          // Merge passwords across devices
-          const mergedPasswords = {
-            ...this.data.passwords,
-            ...(serverData.passwords || {})
-          };
-
-          // Merge trips (keeping latest live location)
-          const tripMap = new Map<string, Trip>();
-          this.data.trips.forEach(t => tripMap.set(t.id, t));
-          (serverData.trips || []).forEach(t => {
-            const existing = tripMap.get(t.id);
-            if (!existing) {
-              tripMap.set(t.id, t);
-              hasChanges = true;
-            } else {
-              const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
-              const serverTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
-              if (serverTime > existingTime || existing.status !== t.status || existing.availableSeats !== t.availableSeats) {
-                tripMap.set(t.id, t);
-                hasChanges = true;
-              }
-            }
-          });
-          const mergedTrips = Array.from(tripMap.values());
-
-          // Merge bookings
-          const bookingMap = new Map<string, Booking>();
-          this.data.bookings.forEach(b => bookingMap.set(b.id, b));
-          (serverData.bookings || []).forEach(b => {
-            const old = bookingMap.get(b.id);
-            if (!old || old.status !== b.status) {
-              hasChanges = true;
-            }
-            bookingMap.set(b.id, b);
-          });
-          const mergedBookings = Array.from(bookingMap.values());
-
-          // Merge tickets & announcement
-          const mergedTickets = serverData.tickets || this.data.tickets;
-          const mergedAnnouncement = serverData.announcement || this.data.announcement;
-
-          if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length) {
-            this.data = {
-              ...this.data,
-              users: mergedUsers,
-              passwords: mergedPasswords,
-              trips: mergedTrips,
-              bookings: mergedBookings,
-              tickets: mergedTickets,
-              announcement: mergedAnnouncement
-            };
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-            } catch {}
-
-            // Sync current user status if updated remotely (e.g. driver approval)
-            if (this.currentUser) {
-              const freshUser = this.data.users.find(u => u.id === this.currentUser?.id);
-              if (freshUser && (freshUser.status !== this.currentUser.status || freshUser.name !== this.currentUser.name)) {
-                this.currentUser = freshUser;
-                try {
-                  localStorage.setItem(AUTH_KEY, JSON.stringify(freshUser));
-                } catch {}
-              }
-            }
+          const changed = this.mergeRemoteState(json.data);
+          if (changed) {
             this.notify();
           }
         }
@@ -271,15 +548,53 @@ class TransitStore {
     }
   }
 
+  // --- Real-time Presence Getters for UI across all devices ---
+  public getActivePresence(): ActivePresence[] {
+    return this.activePresence;
+  }
+
+  public getOnlineDrivers(): ActivePresence[] {
+    return this.activePresence.filter(p => p.role === 'driver');
+  }
+
+  public getOnlinePassengers(): ActivePresence[] {
+    return this.activePresence.filter(p => p.role === 'passenger');
+  }
+
+  public getOnlineAdmins(): ActivePresence[] {
+    return this.activePresence.filter(p => p.role === 'admin');
+  }
+
+  public getSessionId(): string {
+    return this.sessionId;
+  }
+
+  public getDeviceName(): string {
+    return this.deviceName;
+  }
+
+  public getDeviceType(): 'mobile' | 'tablet' | 'desktop' {
+    return this.deviceType;
+  }
+
   private loadData(): StoredData {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
+        if (!Array.isArray(parsed.deletedUserIds)) parsed.deletedUserIds = [];
+        if (!Array.isArray(parsed.deletedTripIds)) parsed.deletedTripIds = [];
+        if (!Array.isArray(parsed.deletedBookingIds)) parsed.deletedBookingIds = [];
+
         if (Array.isArray(parsed.users)) {
-          // Purge mock drivers and Salman naming
+          // Purge mock drivers, mock passengers, and deleted users
           parsed.users = parsed.users.filter(
-            (u: User) => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+            (u: User) =>
+              !u.id.startsWith('usr-driver-') &&
+              !u.id.startsWith('usr-pass-') &&
+              u.email !== 'fahad@driver.sa' &&
+              u.email !== 'ali@driver.sa' &&
+              !parsed.deletedUserIds.includes(u.id)
           );
           parsed.users.forEach((u: User) => {
             if (u.name && u.name.includes('سلمان')) {
@@ -295,10 +610,24 @@ class TransitStore {
         }
         if (Array.isArray(parsed.trips)) {
           parsed.trips = parsed.trips.filter(
-            (t: Trip) => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+            (t: Trip) =>
+              t.driverId !== 'usr-driver-1' &&
+              t.driverId !== 'usr-driver-2' &&
+              !parsed.deletedTripIds.includes(t.id) &&
+              !parsed.deletedUserIds.includes(t.driverId)
           );
         } else {
           parsed.trips = [];
+        }
+        if (Array.isArray(parsed.bookings)) {
+          parsed.bookings = parsed.bookings.filter(
+            (b: Booking) =>
+              !parsed.deletedBookingIds.includes(b.id) &&
+              !parsed.deletedUserIds.includes(b.passengerId) &&
+              !parsed.deletedTripIds.includes(b.tripId)
+          );
+        } else {
+          parsed.bookings = [];
         }
         return parsed;
       }
@@ -318,7 +647,10 @@ class TransitStore {
       bookings: INITIAL_BOOKINGS,
       tickets: INITIAL_SUPPORT_TICKETS,
       announcement: INITIAL_ANNOUNCEMENT,
-      passwords: defaultPasswords
+      passwords: defaultPasswords,
+      deletedUserIds: [],
+      deletedTripIds: [],
+      deletedBookingIds: []
     };
 
     this.saveData(initialData);
@@ -367,6 +699,7 @@ class TransitStore {
       localStorage.removeItem(AUTH_KEY);
     }
     this.notify();
+    this.sendPresenceHeartbeat(user ? `متصل الآن كـ ${user.role === 'driver' ? 'سائق حافلة 🚌' : user.role === 'admin' ? 'إدارة 🛡️' : 'راكب 👤'}` : 'زائر');
   }
 
   public subscribe(listener: () => void) {
@@ -455,7 +788,14 @@ class TransitStore {
         const res = await fetch('/api/transit/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: cleanId, password: cleanPass, role: targetRole })
+          body: JSON.stringify({
+            identifier: cleanId,
+            password: cleanPass,
+            role: targetRole,
+            sessionId: this.sessionId,
+            deviceType: this.deviceType,
+            deviceName: this.deviceName
+          })
         });
         const json = await res.json();
         if (res.ok && json.success && json.user) {
@@ -537,6 +877,15 @@ class TransitStore {
   }
 
   public logout() {
+    if (typeof window !== 'undefined') {
+      try {
+        fetch('/api/transit/presence/leave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: this.sessionId })
+        });
+      } catch {}
+    }
     this.saveAuth(null);
   }
 
@@ -1126,12 +1475,16 @@ class TransitStore {
     return { success: true };
   }
 
-  public deleteTrip(tripId: string): { success: boolean; error?: string } {
+  public async deleteTrip(tripId: string): Promise<{ success: boolean; error?: string }> {
     const trip = this.data.trips.find(t => t.id === tripId);
     if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
     if (trip.status === 'in_progress') {
       return { success: false, error: 'لا يمكن حذف رحلة جارية حالياً على الطريق' };
     }
+
+    if (!this.data.deletedTripIds) this.data.deletedTripIds = [];
+    if (!this.data.deletedTripIds.includes(tripId)) this.data.deletedTripIds.push(tripId);
+
     this.data.bookings.forEach(b => {
       if (b.tripId === tripId && b.status !== 'boarded') {
         b.status = 'cancelled';
@@ -1139,6 +1492,15 @@ class TransitStore {
     });
     this.data.trips = this.data.trips.filter(t => t.id !== tripId);
     this.saveData(this.data);
+
+    try {
+      await fetch('/api/transit/delete-trip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId })
+      });
+    } catch {}
+
     return { success: true };
   }
 
@@ -1226,16 +1588,21 @@ class TransitStore {
   }
 
   // Requirement: Deletion cancels upcoming trips & bookings. Denied if has trip in_progress!
-  public deleteDriver(driverId: string): { success: boolean; error?: string } {
+  public async deleteDriver(driverId: string): Promise<{ success: boolean; error?: string }> {
     const hasActiveTrip = this.data.trips.some(t => t.driverId === driverId && t.status === 'in_progress');
     if (hasActiveTrip) {
       return { success: false, error: 'لا يمكن حذف السائق نظراً لوجود رحلة جارية حالياً له على الطريق!' };
     }
 
+    if (!this.data.deletedUserIds) this.data.deletedUserIds = [];
+    if (!this.data.deletedUserIds.includes(driverId)) this.data.deletedUserIds.push(driverId);
+
     // Cancel upcoming trips and bookings
+    const cancelledTripIds: string[] = [];
     this.data.trips.forEach(t => {
       if (t.driverId === driverId && t.status === 'scheduled') {
         t.status = 'cancelled';
+        cancelledTripIds.push(t.id);
         this.data.bookings.forEach(b => {
           if (b.tripId === t.id && b.status === 'confirmed') {
             b.status = 'cancelled';
@@ -1244,9 +1611,23 @@ class TransitStore {
       }
     });
 
+    if (!this.data.deletedTripIds) this.data.deletedTripIds = [];
+    cancelledTripIds.forEach(tId => {
+      if (!this.data.deletedTripIds!.includes(tId)) this.data.deletedTripIds!.push(tId);
+    });
+
     // Remove user
     this.data.users = this.data.users.filter(u => u.id !== driverId);
     this.saveData(this.data);
+
+    try {
+      await fetch('/api/transit/delete-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: driverId })
+      });
+    } catch {}
+
     return { success: true };
   }
 
@@ -1255,9 +1636,12 @@ class TransitStore {
     return this.data.users.filter(u => u.role === 'passenger');
   }
 
-  public deletePassenger(passengerId: string): { success: boolean; error?: string } {
+  public async deletePassenger(passengerId: string): Promise<{ success: boolean; error?: string }> {
     const passenger = this.data.users.find(u => u.id === passengerId && u.role === 'passenger');
     if (!passenger) return { success: false, error: 'الراكب غير موجود' };
+
+    if (!this.data.deletedUserIds) this.data.deletedUserIds = [];
+    if (!this.data.deletedUserIds.includes(passengerId)) this.data.deletedUserIds.push(passengerId);
 
     // Cancel active bookings for this passenger
     this.data.bookings.forEach(b => {
@@ -1269,6 +1653,15 @@ class TransitStore {
     // Remove user
     this.data.users = this.data.users.filter(u => u.id !== passengerId);
     this.saveData(this.data);
+
+    try {
+      await fetch('/api/transit/delete-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: passengerId })
+      });
+    } catch {}
+
     return { success: true };
   }
 

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { User } from '../types/transit';
-import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Menu, X, KeyRound, UserPlus } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, ActivePresence } from '../types/transit';
+import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Menu, X, KeyRound, UserPlus, Radio } from 'lucide-react';
 import { transitStore } from '../services/transitStore';
+import { LivePresenceModal } from './LivePresenceModal';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -21,6 +22,16 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [presenceList, setPresenceList] = useState<ActivePresence[]>(() => transitStore.getActivePresence());
+  const [isPresenceModalOpen, setIsPresenceModalOpen] = useState(false);
+
+  useEffect(() => {
+    const update = () => {
+      setPresenceList(transitStore.getActivePresence());
+    };
+    const unsub = transitStore.subscribe(update);
+    return unsub;
+  }, []);
 
   const handleNavRefresh = () => {
     setIsRefreshing(true);
@@ -104,6 +115,19 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Right Action buttons & Auth Status */}
           <div className="flex items-center gap-2">
+            {/* Live Presence Device Badge */}
+            <button
+              onClick={() => setIsPresenceModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-emerald-950/70 border border-emerald-600/50 text-emerald-300 text-xs font-bold hover:bg-emerald-900/60 transition-all shadow-sm"
+              title="الأجهزة والمستخدمون المتصلون الآن عبر الشبكة"
+            >
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <Radio className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="hidden sm:inline">متصل الآن:</span>
+              <span className="font-mono">{presenceList.length || 1}</span>
+              <span className="hidden md:inline text-[10px] text-emerald-400/80">أجهزة 📡</span>
+            </button>
+
             {/* Quick Refresh Button */}
             <button
               onClick={handleNavRefresh}
@@ -267,6 +291,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         )}
       </div>
+
+      {/* Live Cross-Device Connected Presence Modal */}
+      <LivePresenceModal
+        isOpen={isPresenceModalOpen}
+        onClose={() => setIsPresenceModalOpen(false)}
+        presenceList={presenceList}
+      />
     </header>
   );
 };

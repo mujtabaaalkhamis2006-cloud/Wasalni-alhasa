@@ -114,3 +114,22 @@ export interface AdminStats {
   pendingDrivers: number;
   activeTripsCount: number;
 }
+
+export interface ActivePresence {
+  sessionId: string;
+  userId?: string;
+  userName: string;
+  role: 'driver' | 'passenger' | 'admin' | 'visitor';
+  deviceType: 'mobile' | 'tablet' | 'desktop';
+  deviceName: string;
+  ip?: string;
+  city?: string;
+  lastSeen: string;
+  isOnline: boolean;
+  statusText?: string;
+  coords?: {
+    lat: number;
+    lng: number;
+  };
+  activeTripId?: string;
+}

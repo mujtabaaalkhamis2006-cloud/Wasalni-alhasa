@@ -8,7 +8,8 @@ import {
   Booking,
   SupportTicket,
   Announcement,
-  AdminStats
+  AdminStats,
+  ActivePresence
 } from '../types/transit';
 import { AlAhsaMap } from './AlAhsaMap';
 import { ConfirmModal, ConfirmDialogState } from './ConfirmModal';
@@ -61,6 +62,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Stats
   const [stats, setStats] = useState<AdminStats>(transitStore.getAdminStats());
+  const [presenceList, setPresenceList] = useState<ActivePresence[]>(() => transitStore.getActivePresence());
 
   // Drivers & Passengers
   const [drivers, setDrivers] = useState<User[]>(transitStore.getDrivers());
@@ -123,19 +125,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStationList(transitStore.getStations());
     setAllBookings(transitStore.getAllBookings());
     setTickets(transitStore.getSupportTickets());
+    setPresenceList(transitStore.getActivePresence());
+  };
+
+  const [isPurgingMock, setIsPurgingMock] = useState(false);
+
+  const handlePurgeMockData = async () => {
+    setIsPurgingMock(true);
+    try {
+      await transitStore.purgeMockData();
+      setFeedback({
+        type: 'success',
+        msg: 'تم تطهير وحظر جميع الحسابات والتسجيلات الوهمية والافتراضية نهائياً من كافة الأجهزة ومن الخادم ✓'
+      });
+      refreshAllAdmin();
+    } catch {
+      setFeedback({ type: 'error', msg: 'حدث خطأ أثناء تطهير البيانات الوهمية' });
+    } finally {
+      setIsPurgingMock(false);
+    }
   };
 
   const handleDeletePassenger = (id: string, name: string) => {
     setConfirmDialog({
       isOpen: true,
-      title: 'حذف حساب الراكب',
-      message: `هل أنت متأكد من حذف حساب الراكب (${name})؟ سيتم إلغاء جميع حجوزاته النشطة نهائياً من سجلات النظام.`,
-      confirmLabel: 'تأكيد حذف الراكب',
+      title: 'حذف حساب الراكب نهائياً',
+      message: `هل أنت متأكد من حذف حساب الراكب (${name}) نهائياً؟ سيتم حظر الحساب وحذفه من الخادم وكافة الأجهزة وإلغاء كافة حجوزاته.`,
+      confirmLabel: 'تأكيد الحذف النهائي للراكب',
       type: 'danger',
-      onConfirm: () => {
-        const res = transitStore.deletePassenger(id);
+      onConfirm: async () => {
+        const res = await transitStore.deletePassenger(id);
         if (res.success) {
-          setFeedback({ type: 'success', msg: `تم حذف حساب الراكب (${name}) بنجاح وإلغاء حجوزاته ✓` });
+          setFeedback({ type: 'success', msg: `تم حذف حساب الراكب (${name}) نهائياً وحظر عودته من كافة الأجهزة ✓` });
           refreshAllAdmin();
         } else {
           setFeedback({ type: 'error', msg: res.error || 'تعذر حذف الراكب' });
@@ -167,13 +188,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setConfirmDialog({
       isOpen: true,
       title: 'حذف الرحلة نهائياً',
-      message: `هل أنت متأكد من حذف رحلة (${routeName}) نهائياً من سجلات النظام؟`,
-      confirmLabel: 'تأكيد الحذف النهائي',
+      message: `هل أنت متأكد من حذف رحلة (${routeName}) نهائياً من سجلات النظام وقاعدة البيانات؟`,
+      confirmLabel: 'تأكيد الحذف النهائي للرحلة',
       type: 'danger',
-      onConfirm: () => {
-        const res = transitStore.deleteTrip(tripId);
+      onConfirm: async () => {
+        const res = await transitStore.deleteTrip(tripId);
         if (res.success) {
-          setFeedback({ type: 'success', msg: `تم حذف رحلة (${routeName}) من النظام بنجاح ✓` });
+          setFeedback({ type: 'success', msg: `تم حذف رحلة (${routeName}) نهائياً من كافة الأجهزة والخادم ✓` });
           refreshAllAdmin();
         } else {
           setFeedback({ type: 'error', msg: res.error || 'تعذر حذف الرحلة' });
@@ -230,14 +251,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleDeleteDriver = (id: string) => {
     setConfirmDialog({
       isOpen: true,
-      title: 'حذف السائق والحافلة',
-      message: 'هل أنت متأكد من حذف هذا السائق وحافلته؟ سيتم إلغاء رحلاته القادمة وحجوزاتها تلقائياً. (لن يتم الحذف إذا كانت لديه رحلة جارية حالياً على الطريق).',
-      confirmLabel: 'تأكيد حذف السائق',
+      title: 'حذف السائق والحافلة نهائياً',
+      message: 'هل أنت متأكد من حذف هذا السائق وحافلته نهائياً؟ سيتم حظر الحساب وحذفه من الخادم وكافة الأجهزة وإلغاء رحلاته القادمة تلقائياً. (لن يتم الحذف إذا كانت لديه رحلة جارية حالياً على الطريق).',
+      confirmLabel: 'تأكيد الحذف النهائي للسائق',
       type: 'danger',
-      onConfirm: () => {
-        const res = transitStore.deleteDriver(id);
+      onConfirm: async () => {
+        const res = await transitStore.deleteDriver(id);
         if (res.success) {
-          setFeedback({ type: 'success', msg: 'تم حذف السائق والحافلة بنجاح وإلغاء رحلاته القادمة ✓' });
+          setFeedback({ type: 'success', msg: 'تم حذف السائق والحافلة نهائياً وحظر عودته من كافة الأجهزة المسجلة ✓' });
           refreshAllAdmin();
         } else {
           setFeedback({ type: 'error', msg: res.error || 'لا يمكن حذف السائق' });
@@ -644,6 +665,82 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
           </div>
 
+          {/* Live Cross-Device Connected Presence Radar */}
+          <div className="bg-slate-900 border border-emerald-500/30 rounded-3xl p-5 shadow-2xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center">
+                  <Radio className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                    <h3 className="text-base font-black text-white">
+                      الأجهزة والمستخدمون المتصلون الآن عبر الشبكة ({presenceList.length})
+                    </h3>
+                    <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded-full font-bold">
+                      مزامنة حية لكل الأجهزة ⚡
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    أي مستخدم يدخل من أي هاتف أو كمبيوتر يظهر هنا ولكافة المشتركين في الوقت الفعلي
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs">
+                <span className="px-2.5 py-1 rounded-xl bg-amber-950/60 border border-amber-800 text-amber-300 font-bold">
+                  سائقون: {presenceList.filter(p => p.role === 'driver').length}
+                </span>
+                <span className="px-2.5 py-1 rounded-xl bg-sky-950/60 border border-sky-800 text-sky-300 font-bold">
+                  ركاب: {presenceList.filter(p => p.role === 'passenger').length}
+                </span>
+                <span className="px-2.5 py-1 rounded-xl bg-rose-950/60 border border-rose-800 text-rose-300 font-bold">
+                  إدارة: {presenceList.filter(p => p.role === 'admin').length}
+                </span>
+              </div>
+            </div>
+
+            {presenceList.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-400">
+                جاري تحديث قائمة الأجهزة المتصلة...
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {presenceList.map(p => (
+                  <div
+                    key={p.sessionId}
+                    className="p-3.5 rounded-2xl bg-slate-800/50 border border-slate-700/60 flex items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold shrink-0 ${
+                        p.role === 'driver' ? 'bg-amber-500/20 text-amber-400' :
+                        p.role === 'admin' ? 'bg-rose-500/20 text-rose-400' : 'bg-sky-500/20 text-sky-400'
+                      }`}>
+                        {p.role === 'driver' ? '🚌' : p.role === 'admin' ? '🛡️' : '👤'}
+                      </div>
+                      <div className="truncate">
+                        <div className="font-bold text-white truncate flex items-center gap-1.5">
+                          <span>{p.userName}</span>
+                          <span className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
+                            p.role === 'driver' ? 'bg-amber-950 text-amber-400' :
+                            p.role === 'admin' ? 'bg-rose-950 text-rose-400' : 'bg-sky-950 text-sky-400'
+                          }`}>
+                            {p.role === 'driver' ? 'سائق' : p.role === 'admin' ? 'إدارة' : 'راكب'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                          {p.deviceName} | <span className="text-emerald-400">{p.statusText || 'متصل 🟢'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Live Fleet Operations Room (غرفة العمليات والمراقبة الميدانية المباشرة) */}
           <div className="space-y-4 bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-2xl">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -748,11 +845,20 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       {/* TAB 2: DRIVERS MANAGEMENT (Approve, Reject, Edit driver & bus, Delete with in_progress check) */}
       {adminTab === 'drivers' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-lg font-black text-white">إدارة السائقين والحافلات</h3>
-              <p className="text-xs text-slate-400">اعتماد السائقين الجدد (Pending)، تعديل السائق وحافلته معاً، وحذف السائقين</p>
+              <p className="text-xs text-slate-400">اعتماد السائقين الجدد (Pending)، تعديل السائق وحافلته معاً، وحذف وحظر السائقين نهائياً</p>
             </div>
+            <button
+              onClick={handlePurgeMockData}
+              disabled={isPurgingMock}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-bold flex items-center gap-2 transition shadow-sm disabled:opacity-50"
+              title="تطهير وحظر كافة التسجيلات والحسابات الوهمية والافتراضية نهائياً من كافة الأجهزة"
+            >
+              <span>🧹</span>
+              <span>{isPurgingMock ? 'جارِ التطهير...' : 'إلغاء وتطهير التسجيلات الوهمية نهائياً'}</span>
+            </button>
           </div>
 
           {drivers.length === 0 ? (

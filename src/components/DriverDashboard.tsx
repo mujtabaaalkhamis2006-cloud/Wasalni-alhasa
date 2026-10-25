@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { transitStore } from '../services/transitStore';
-import { User, Trip, Booking, TransitRoute, TransitStation } from '../types/transit';
+import { User, Trip, Booking, TransitRoute, TransitStation, ActivePresence } from '../types/transit';
 import { AlAhsaMap } from './AlAhsaMap';
 import { ConfirmModal, ConfirmDialogState } from './ConfirmModal';
 import { requestUserLocation } from '../utils/geoUtils';
@@ -21,7 +21,10 @@ import {
   Radio,
   Compass,
   Activity,
-  Satellite
+  Satellite,
+  Smartphone,
+  Wifi,
+  Globe
 } from 'lucide-react';
 
 interface DriverDashboardProps {
@@ -49,6 +52,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
   const [passengers, setPassengers] = useState<Booking[]>([]);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
+  const [activePresence, setActivePresence] = useState<ActivePresence[]>(() => transitStore.getActivePresence());
 
   // GPS Telemetry State (Pure Real Physical Device GPS)
   const [gpsTelemetry, setGpsTelemetry] = useState<{
@@ -102,7 +106,11 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
 
   useEffect(() => {
     refreshData();
-    const unsub = transitStore.subscribe(refreshData);
+    setActivePresence(transitStore.getActivePresence());
+    const unsub = transitStore.subscribe(() => {
+      refreshData();
+      setActivePresence(transitStore.getActivePresence());
+    });
     return unsub;
   }, [currentUser]);
 
@@ -579,6 +587,38 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
               </select>
             </div>
           )}
+        </div>
+      </div>
+
+      {/* Live Cross-Device Multi-Terminal Banner */}
+      <div className="bg-gradient-to-r from-emerald-950/50 via-slate-900 to-sky-950/50 border border-emerald-500/30 rounded-2xl p-3.5 sm:p-4 text-xs shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="relative flex h-3 w-3">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+            </span>
+            <div className="flex items-center gap-2">
+              <Smartphone className="w-4 h-4 text-emerald-400" />
+              <span className="text-white font-bold">
+                جهازك الحالي: <span className="text-emerald-300 font-mono">{transitStore.getDeviceName()}</span>
+              </span>
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-bold">
+                متصل حي ومباشر
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 text-slate-300 text-[11px]">
+            <span className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1 rounded-lg border border-slate-700">
+              <Wifi className="w-3.5 h-3.5 text-sky-400" />
+              <span>مزامنة فورية (SSE):</span>
+              <strong className="text-white font-mono">{activePresence.length}</strong> أجهزة متصلة بالشبكة
+            </span>
+            <span className="hidden md:inline-block text-slate-400">
+              ⚡ أي رحلة تبدأها أو موقع تبثه يظهر في الثانية نفسها لجميع الركاب والإدارة
+            </span>
+          </div>
         </div>
       </div>
 

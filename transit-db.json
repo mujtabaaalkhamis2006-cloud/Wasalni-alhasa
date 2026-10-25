@@ -291,14 +291,8 @@
     "admin@hasa-bus.sa": "admin123",
     "0501112233": "admin123"
   },
-  "driverLocations": {
-    "usr-drv-test": {
-      "lat": 25.3855,
-      "lng": 49.5888,
-      "speed": 32,
-      "heading": 90,
-      "accuracy": 4,
-      "lastUpdated": "2026-10-24T17:11:40.489Z"
-    }
-  }
+  "driverLocations": {},
+  "deletedUserIds": [],
+  "deletedTripIds": [],
+  "deletedBookingIds": []
 }
