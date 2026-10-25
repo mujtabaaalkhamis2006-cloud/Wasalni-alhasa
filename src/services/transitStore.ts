@@ -1,0 +1,1473 @@
+import {
+  User,
+  TransitStation,
+  TransitRoute,
+  Trip,
+  Booking,
+  SupportTicket,
+  Announcement,
+  AdminStats,
+  UserRole
+} from '../types/transit';
+import {
+  INITIAL_USERS,
+  INITIAL_STATIONS,
+  INITIAL_ROUTES,
+  INITIAL_TRIPS,
+  INITIAL_BOOKINGS,
+  INITIAL_SUPPORT_TICKETS,
+  INITIAL_ANNOUNCEMENT
+} from '../data/mockData';
+
+const STORAGE_KEY = 'al_ahsa_transit_real_v5';
+const AUTH_KEY = 'al_ahsa_transit_auth_v5';
+
+interface StoredData {
+  users: User[];
+  stations: TransitStation[];
+  routes: TransitRoute[];
+  trips: Trip[];
+  bookings: Booking[];
+  tickets: SupportTicket[];
+  announcement: Announcement;
+  passwords: Record<string, string>; // Secured passwords
+}
+
+class TransitStore {
+  private data: StoredData;
+  private currentUser: User | null = null;
+  private listeners: Set<() => void> = new Set();
+  private isSyncing = false;
+
+  constructor() {
+    this.data = this.loadData();
+    this.currentUser = this.loadAuth();
+    this.syncWithServer();
+    if (typeof window !== 'undefined') {
+      // 3.5s balanced polling for multi-device synchronization without freezing mobile CPU
+      setInterval(() => {
+        this.syncWithServer();
+      }, 3500);
+    }
+  }
+
+  private lastBroadcastStamp = 0;
+
+  public async pushRegistration(user: User, pass?: string) {
+    if (typeof window === 'undefined') return;
+    try {
+      await fetch('/api/transit/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, password: pass })
+      });
+      await this.syncWithServer();
+    } catch (e) {
+      // offline fallback
+    }
+  }
+
+  public async broadcastDriverGps(
+    tripId: string,
+    lat: number,
+    lng: number,
+    speed?: number | null,
+    heading?: number | null,
+    accuracy?: number | null,
+    driverId?: string
+  ) {
+    const now = Date.now();
+    // 1. Update trip location locally immediately
+    const trip = this.data.trips.find(t => t.id === tripId);
+    const speedKmh = typeof speed === 'number' && !isNaN(speed) ? Math.max(0, Math.round(speed)) : (trip?.currentLocation?.speed ?? 0);
+    const headingDeg = typeof heading === 'number' && !isNaN(heading) ? Math.round(heading) : (trip?.currentLocation?.heading ?? 0);
+    const accuracyM = typeof accuracy === 'number' && !isNaN(accuracy) ? Math.round(accuracy) : 5;
+
+    const newLocation = {
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+      speed: speedKmh,
+      heading: headingDeg,
+      accuracy: accuracyM,
+      lastUpdated: new Date().toISOString()
+    };
+
+    if (trip) {
+      trip.currentLocation = newLocation;
+      if (trip.status !== 'in_progress') {
+        trip.status = 'in_progress';
+      }
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      } catch {}
+      this.notify();
+    }
+
+    // Throttle network broadcast to at most once per 2 seconds to keep mobile responsive
+    if (now - this.lastBroadcastStamp < 2000) {
+      return;
+    }
+    this.lastBroadcastStamp = now;
+
+    // 2. Transmit to server so other devices (passengers & admin) see it in real-time
+    if (typeof window !== 'undefined') {
+      try {
+        await fetch('/api/transit/driver-gps', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tripId,
+            driverId: driverId || trip?.driverId || this.currentUser?.id,
+            lat,
+            lng,
+            speed: speedKmh,
+            heading: headingDeg,
+            accuracy: accuracyM
+          })
+        });
+      } catch (e) {
+        // offline fallback
+      }
+    }
+  }
+
+  public async purgeMockData(): Promise<void> {
+    try {
+      await fetch('/api/transit/purge-mock-data', { method: 'POST' });
+    } catch {}
+
+    // Clean local data permanently
+    this.data.users = this.data.users.filter(
+      u => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+    );
+    this.data.trips = this.data.trips.filter(
+      t => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+    );
+    delete this.data.passwords['fahad@driver.sa'];
+    delete this.data.passwords['ali@driver.sa'];
+
+    this.saveData(this.data);
+    await this.syncWithServer();
+  }
+
+  private async pushToServer(data: StoredData) {
+    if (typeof window === 'undefined') return;
+    try {
+      await fetch('/api/transit/state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+    } catch (e) {
+      // offline fallback
+    }
+  }
+
+  public async syncWithServer() {
+    if (typeof window === 'undefined' || this.isSyncing) return;
+    this.isSyncing = true;
+    try {
+      const res = await fetch('/api/transit/state');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data && Array.isArray(json.data.users)) {
+          const serverData: StoredData = json.data;
+          
+          // Purge any residual mock drivers if server returned them
+          serverData.users = (serverData.users || []).filter(
+            u => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+          );
+          serverData.trips = (serverData.trips || []).filter(
+            t => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+          );
+
+          let hasChanges = false;
+
+          // Merge users from server (all registered users on other devices)
+          const userMap = new Map<string, User>();
+          this.data.users.forEach(u => userMap.set(u.id, u));
+          serverData.users.forEach(u => {
+            const old = userMap.get(u.id);
+            if (!old || JSON.stringify(old) !== JSON.stringify(u)) {
+              hasChanges = true;
+            }
+            userMap.set(u.id, u);
+          });
+          const mergedUsers = Array.from(userMap.values());
+
+          // Merge passwords across devices
+          const mergedPasswords = {
+            ...this.data.passwords,
+            ...(serverData.passwords || {})
+          };
+
+          // Merge trips (keeping latest live location)
+          const tripMap = new Map<string, Trip>();
+          this.data.trips.forEach(t => tripMap.set(t.id, t));
+          (serverData.trips || []).forEach(t => {
+            const existing = tripMap.get(t.id);
+            if (!existing) {
+              tripMap.set(t.id, t);
+              hasChanges = true;
+            } else {
+              const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
+              const serverTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
+              if (serverTime > existingTime || existing.status !== t.status || existing.availableSeats !== t.availableSeats) {
+                tripMap.set(t.id, t);
+                hasChanges = true;
+              }
+            }
+          });
+          const mergedTrips = Array.from(tripMap.values());
+
+          // Merge bookings
+          const bookingMap = new Map<string, Booking>();
+          this.data.bookings.forEach(b => bookingMap.set(b.id, b));
+          (serverData.bookings || []).forEach(b => {
+            const old = bookingMap.get(b.id);
+            if (!old || old.status !== b.status) {
+              hasChanges = true;
+            }
+            bookingMap.set(b.id, b);
+          });
+          const mergedBookings = Array.from(bookingMap.values());
+
+          // Merge tickets & announcement
+          const mergedTickets = serverData.tickets || this.data.tickets;
+          const mergedAnnouncement = serverData.announcement || this.data.announcement;
+
+          if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length) {
+            this.data = {
+              ...this.data,
+              users: mergedUsers,
+              passwords: mergedPasswords,
+              trips: mergedTrips,
+              bookings: mergedBookings,
+              tickets: mergedTickets,
+              announcement: mergedAnnouncement
+            };
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+            } catch {}
+
+            // Sync current user status if updated remotely (e.g. driver approval)
+            if (this.currentUser) {
+              const freshUser = this.data.users.find(u => u.id === this.currentUser?.id);
+              if (freshUser && (freshUser.status !== this.currentUser.status || freshUser.name !== this.currentUser.name)) {
+                this.currentUser = freshUser;
+                try {
+                  localStorage.setItem(AUTH_KEY, JSON.stringify(freshUser));
+                } catch {}
+              }
+            }
+            this.notify();
+          }
+        }
+      }
+    } catch (e) {
+      // ignore network errors
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  private loadData(): StoredData {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed.users)) {
+          // Purge mock drivers and Salman naming
+          parsed.users = parsed.users.filter(
+            (u: User) => !u.id.startsWith('usr-driver-') && !u.id.startsWith('usr-pass-') && u.email !== 'fahad@driver.sa' && u.email !== 'ali@driver.sa'
+          );
+          parsed.users.forEach((u: User) => {
+            if (u.name && u.name.includes('سلمان')) {
+              u.name = 'مسؤول إدارة العمليات';
+            }
+          });
+          // Ensure admin user exists
+          INITIAL_USERS.forEach(initU => {
+            if (!parsed.users.some((u: User) => u.id === initU.id)) {
+              parsed.users.push(initU);
+            }
+          });
+        }
+        if (Array.isArray(parsed.trips)) {
+          parsed.trips = parsed.trips.filter(
+            (t: Trip) => t.driverId !== 'usr-driver-1' && t.driverId !== 'usr-driver-2'
+          );
+        } else {
+          parsed.trips = [];
+        }
+        return parsed;
+      }
+    } catch (e) {
+      console.warn('Could not read from localStorage, using clean initial data');
+    }
+
+    const defaultPasswords: Record<string, string> = {
+      'admin@hasa-bus.sa': 'admin123'
+    };
+
+    const initialData: StoredData = {
+      users: INITIAL_USERS,
+      stations: INITIAL_STATIONS,
+      routes: INITIAL_ROUTES,
+      trips: [],
+      bookings: INITIAL_BOOKINGS,
+      tickets: INITIAL_SUPPORT_TICKETS,
+      announcement: INITIAL_ANNOUNCEMENT,
+      passwords: defaultPasswords
+    };
+
+    this.saveData(initialData);
+    return initialData;
+  }
+
+  private saveData(data: StoredData) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('Failed to save to localStorage');
+    }
+    this.notify();
+    this.pushToServer(data);
+  }
+
+  private loadAuth(): User | null {
+    try {
+      const savedAuth = localStorage.getItem(AUTH_KEY);
+      if (savedAuth) {
+        const parsed = JSON.parse(savedAuth);
+        if (parsed.name && parsed.name.includes('سلمان')) {
+          parsed.name = 'مسؤول إدارة العمليات';
+        }
+        // Ensure user still exists in DB
+        const existing = this.data.users.find(u => u.id === parsed.id);
+        if (existing) {
+          if (existing.name && existing.name.includes('سلمان')) {
+            existing.name = 'مسؤول إدارة العمليات';
+          }
+          return existing;
+        }
+        return parsed;
+      }
+    } catch (e) {
+      // ignore
+    }
+    return null;
+  }
+
+  private saveAuth(user: User | null) {
+    this.currentUser = user;
+    if (user) {
+      localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(AUTH_KEY);
+    }
+    this.notify();
+  }
+
+  public subscribe(listener: () => void) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private notify() {
+    this.listeners.forEach(fn => fn());
+  }
+
+  // Real-time Bus GPS update from physical device
+  public updateRealDeviceLocation(tripId: string, lat: number, lng: number, speed?: number, heading?: number, accuracy?: number) {
+    this.broadcastDriverGps(tripId, lat, lng, speed, heading, accuracy);
+  }
+
+
+  public registerAdmin(name: string, phone: string, email: string, pass: string): { success: boolean; user?: User; error?: string } {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPhone = phone.trim();
+    const cleanName = name.trim();
+
+    if (!cleanName || !cleanEmail || !cleanPhone || !pass) {
+      return { success: false, error: 'يرجى تعبئة كافة الحقول المطلوبة بما في ذلك اسم مسؤول الإدارة' };
+    }
+
+    const existing = this.data.users.find(
+      u => u.email.toLowerCase() === cleanEmail || u.phone.trim() === cleanPhone
+    );
+
+    if (existing) {
+      if (existing.role === 'admin') {
+        return { success: false, error: 'يوجد حساب إدارة مسجل مسبقاً بهذا البريد أو الجوال' };
+      }
+      return { success: false, error: 'هذا البريد أو رقم الجوال مسجل مسبقاً بحساب آخر' };
+    }
+
+    const newAdmin: User = {
+      id: `usr-admin-${Date.now()}`,
+      name: cleanName,
+      phone: cleanPhone,
+      email: cleanEmail,
+      role: 'admin',
+      status: 'active',
+      createdAt: new Date().toISOString()
+    };
+
+    this.data.users.push(newAdmin);
+    this.data.passwords[cleanEmail] = pass.trim();
+    this.data.passwords[cleanPhone] = pass.trim();
+    this.saveData(this.data);
+    this.saveAuth(newAdmin);
+    this.pushRegistration(newAdmin, pass.trim());
+
+    return { success: true, user: newAdmin };
+  }
+
+  public updateAdminName(userId: string, newName: string): { success: boolean; error?: string } {
+    const cleanName = newName.trim();
+    if (!cleanName) return { success: false, error: 'يرجى إدخال اسم صحيح' };
+    const user = this.data.users.find(u => u.id === userId || (u.role === 'admin' && this.currentUser?.role === 'admin'));
+    if (!user) return { success: false, error: 'حساب الإدارة غير موجود' };
+    user.name = cleanName;
+    if (this.currentUser && (this.currentUser.id === user.id || this.currentUser.role === 'admin')) {
+      this.currentUser.name = cleanName;
+      this.saveAuth(this.currentUser);
+    }
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // ---------------- AUTHENTICATION ----------------
+  public getCurrentUser(): User | null {
+    return this.currentUser;
+  }
+
+  public async loginAsync(identifier: string, pass: string, targetRole?: UserRole): Promise<{ success: boolean; user?: User; error?: string }> {
+    const cleanId = identifier.trim().toLowerCase();
+    const cleanPass = pass.trim();
+
+    // 1. Authoritative Server Verification (checks instant multi-device registration)
+    if (typeof window !== 'undefined') {
+      try {
+        const res = await fetch('/api/transit/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: cleanId, password: cleanPass, role: targetRole })
+        });
+        const json = await res.json();
+        if (res.ok && json.success && json.user) {
+          const user: User = json.user;
+          // Store user locally
+          const exists = this.data.users.find(u => u.id === user.id);
+          if (!exists) {
+            this.data.users.push(user);
+          } else {
+            Object.assign(exists, user);
+          }
+          if (user.email) this.data.passwords[user.email.toLowerCase()] = cleanPass;
+          if (user.phone) this.data.passwords[user.phone.trim()] = cleanPass;
+          this.saveData(this.data);
+          this.saveAuth(user);
+          return { success: true, user };
+        } else if (json.error) {
+          return { success: false, error: json.error };
+        }
+      } catch (err) {
+        // Fallback to local
+      }
+    }
+
+    // 2. Fallback to local store after quick sync
+    await this.syncWithServer();
+    return this.login(identifier, pass, targetRole);
+  }
+
+  public login(identifier: string, pass: string, targetRole?: UserRole): { success: boolean; user?: User; error?: string } {
+    const cleanId = identifier.trim().toLowerCase();
+    const cleanPass = pass.trim();
+
+    const user = this.data.users.find(
+      u => u.email.toLowerCase() === cleanId || u.phone.trim() === cleanId
+    );
+
+    // Unified error message per security requirement
+    const UNIFIED_ERROR = 'بيانات الدخول غير صحيحة، يرجى التأكد والمحاولة مرة أخرى';
+
+    if (!user) {
+      return { success: false, error: UNIFIED_ERROR };
+    }
+
+    const savedPass =
+      this.data.passwords[user.email.toLowerCase()] ||
+      this.data.passwords[user.phone.trim()] ||
+      this.data.passwords[cleanId] ||
+      '123456';
+
+    if (savedPass !== cleanPass) {
+      return { success: false, error: UNIFIED_ERROR };
+    }
+
+    // Role verification
+    if (targetRole && user.role !== targetRole) {
+      if (targetRole === 'admin') {
+        return { success: false, error: 'هذا الحساب ليس لديه صلاحيات الإدارة' };
+      }
+      if (targetRole === 'driver') {
+        return { success: false, error: 'هذا الحساب ليس مسجلاً كسائق' };
+      }
+    }
+
+    // Pending driver check
+    if (user.role === 'driver' && user.status === 'pending') {
+      return {
+        success: false,
+        error: 'حسابك كسائق ما زال قيد المراجعة والتدقيق من قبل الإدارة. سيتم تفعيله قريباً.'
+      };
+    }
+
+    if (user.status === 'rejected') {
+      return { success: false, error: 'تم رفض طلب هذا الحساب من قبل الإدارة' };
+    }
+
+    this.saveAuth(user);
+    return { success: true, user };
+  }
+
+  public logout() {
+    this.saveAuth(null);
+  }
+
+  // Quick switch for demo testing
+  public switchUser(userId: string) {
+    const user = this.data.users.find(u => u.id === userId);
+    if (user) {
+      this.saveAuth(user);
+    }
+  }
+
+  public registerPassenger(name: string, phone: string, email: string, pass: string): { success: boolean; user?: User; error?: string } {
+    if (!name || !phone || !pass) {
+      return { success: false, error: 'جميع الحقول مطلوبة' };
+    }
+
+    const exists = this.data.users.find(u => u.phone === phone || (email && u.email.toLowerCase() === email.toLowerCase()));
+    if (exists) {
+      return { success: false, error: 'رقم الجوال أو البريد الإلكتروني مسجل مسبقاً' };
+    }
+
+    const newUser: User = {
+      id: `usr-p-${Date.now()}`,
+      name: name.trim(),
+      phone: phone.trim(),
+      email: email ? email.trim() : `${phone}@hasa-bus.sa`,
+      role: 'passenger',
+      status: 'active',
+      createdAt: new Date().toISOString()
+    };
+
+    this.data.users.push(newUser);
+    this.data.passwords[newUser.email.toLowerCase()] = pass.trim();
+    this.data.passwords[newUser.phone.trim()] = pass.trim();
+    this.saveData(this.data);
+    this.saveAuth(newUser);
+    this.pushRegistration(newUser, pass.trim());
+
+    return { success: true, user: newUser };
+  }
+
+  public registerDriver(data: {
+    name: string;
+    phone: string;
+    email: string;
+    pass: string;
+    plateNumber: string;
+    model: string;
+    seatsCount: number;
+    busType: string;
+  }): { success: boolean; user?: User; error?: string } {
+    if (!data.name || !data.phone || !data.pass || !data.plateNumber || !data.model) {
+      return { success: false, error: 'يرجى استكمال جميع بيانات السائق والحافلة' };
+    }
+
+    const exists = this.data.users.find(u => u.phone === data.phone || u.email.toLowerCase() === data.email.toLowerCase());
+    if (exists) {
+      return { success: false, error: 'رقم الجوال أو البريد الإلكتروني مسجل مسبقاً' };
+    }
+
+    const newDriver: User = {
+      id: `usr-drv-${Date.now()}`,
+      name: data.name.trim(),
+      phone: data.phone.trim(),
+      email: data.email.trim(),
+      role: 'driver',
+      status: 'pending', // Strictly pending until admin approval!
+      busDetails: {
+        plateNumber: data.plateNumber.trim(),
+        model: data.model.trim(),
+        seatsCount: Number(data.seatsCount) || 20,
+        busType: data.busType.trim() || 'حافلة نقل جماعي'
+      },
+      createdAt: new Date().toISOString()
+    };
+
+    this.data.users.push(newDriver);
+    this.data.passwords[newDriver.email.toLowerCase()] = data.pass.trim();
+    this.data.passwords[newDriver.phone.trim()] = data.pass.trim();
+    this.saveData(this.data);
+    this.pushRegistration(newDriver, data.pass.trim());
+
+    return { success: true, user: newDriver };
+  }
+
+  // ---------------- PASSENGER FEATURES ----------------
+  public getAvailableTrips(): Trip[] {
+    return this.data.trips.filter(t => {
+      // Must not be cancelled or completed
+      if (t.status === 'cancelled' || t.status === 'completed') return false;
+      return true;
+    });
+  }
+
+  public bookTrip(tripId: string, dropoffStation: string, dropoffCoords?: { lat: number; lng: number }): {
+    success: boolean;
+    booking?: Booking;
+    error?: string;
+  } {
+    if (!this.currentUser) {
+      return { success: false, error: 'يجب تسجيل الدخول أولاً لإتمام الحجز' };
+    }
+    if (this.currentUser.role !== 'passenger') {
+      return { success: false, error: 'الحجز متاح لحسابات الركاب فقط' };
+    }
+
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) {
+      return { success: false, error: 'الرحلة غير موجودة' };
+    }
+
+    // Requirement: Check trip has not started & time has not passed
+    const nowTime = new Date().getTime();
+    const tripTime = new Date(trip.departureTime).getTime();
+    if (trip.status === 'in_progress') {
+      return { success: false, error: 'عذراً، انطلقت هذه الرحلة بالفعل ولا يمكن حجزها الآن' };
+    }
+    if (trip.status === 'completed' || trip.status === 'cancelled') {
+      return { success: false, error: 'هذه الرحلة ملغية أو منتهية' };
+    }
+    if (tripTime < nowTime) {
+      return { success: false, error: 'فات موعد انطلاق هذه الرحلة' };
+    }
+
+    // Requirement: Check for another booking for this passenger within 1 hour difference
+    const passengerExistingBookings = this.data.bookings.filter(
+      b => b.passengerId === this.currentUser!.id && (b.status === 'confirmed' || b.status === 'boarded')
+    );
+
+    for (const b of passengerExistingBookings) {
+      const otherTrip = this.data.trips.find(t => t.id === b.tripId);
+      if (otherTrip) {
+        const otherTime = new Date(otherTrip.departureTime).getTime();
+        const diffMinutes = Math.abs(tripTime - otherTime) / (1000 * 60);
+        if (diffMinutes < 60) {
+          return {
+            success: false,
+            error: `لديك حجز آخر للرحلة (${otherTrip.routeName}) بفارق زمني أقل من ساعة (${Math.round(diffMinutes)} دقيقة). يشترط وجود فارق ساعة على الأقل بين رحلاتك.`
+          };
+        }
+      }
+    }
+
+    // Requirement: Check empty seats & allocate first available seat number
+    const activeTripBookings = this.data.bookings.filter(
+      b => b.tripId === tripId && b.status !== 'cancelled'
+    );
+    const occupiedSeats = new Set(activeTripBookings.map(b => b.seatNumber));
+
+    if (occupiedSeats.size >= trip.totalSeats) {
+      return { success: false, error: 'عذراً، هذه الرحلة ممتلئة بالكامل ولا توجد مقاعد شاغرة' };
+    }
+
+    let firstFreeSeat = 1;
+    while (firstFreeSeat <= trip.totalSeats) {
+      if (!occupiedSeats.has(firstFreeSeat)) break;
+      firstFreeSeat++;
+    }
+
+    const newBooking: Booking = {
+      id: `bkg-${Date.now()}`,
+      tripId: trip.id,
+      passengerId: this.currentUser.id,
+      passengerName: this.currentUser.name,
+      passengerPhone: this.currentUser.phone,
+      seatNumber: firstFreeSeat,
+      dropoffStation: dropoffStation || 'المحطة الأخيرة',
+      dropoffCoordinates: dropoffCoords,
+      price: trip.price,
+      status: 'confirmed',
+      bookedAt: new Date().toISOString()
+    };
+
+    this.data.bookings.push(newBooking);
+
+    // Update available seats on trip
+    trip.availableSeats = Math.max(0, trip.totalSeats - (occupiedSeats.size + 1));
+
+    this.saveData(this.data);
+    return { success: true, booking: newBooking };
+  }
+
+  public getMyBookings(): (Booking & { trip?: Trip })[] {
+    if (!this.currentUser) return [];
+    return this.data.bookings
+      .filter(b => b.passengerId === this.currentUser!.id)
+      .map(b => ({
+        ...b,
+        trip: this.data.trips.find(t => t.id === b.tripId)
+      }))
+      .sort((a, b) => new Date(b.bookedAt).getTime() - new Date(a.bookedAt).getTime());
+  }
+
+  public cancelBooking(bookingId: string): { success: boolean; error?: string } {
+    const booking = this.data.bookings.find(b => b.id === bookingId);
+    if (!booking) return { success: false, error: 'الحجز غير موجود' };
+
+    if (this.currentUser && this.currentUser.role === 'passenger' && booking.passengerId !== this.currentUser.id) {
+      return { success: false, error: 'غير مصرح لك بإلغاء هذا الحجز' };
+    }
+
+    const trip = this.data.trips.find(t => t.id === booking.tripId);
+    if (trip && trip.status === 'in_progress') {
+      return { success: false, error: 'لا يمكن إلغاء الحجز لرحلة جارية بالفعل' };
+    }
+    if (booking.status === 'boarded') {
+      return { success: false, error: 'تم صعود الحافلة بالفعل ولا يمكن الإلغاء' };
+    }
+
+    booking.status = 'cancelled';
+
+    // Recalculate trip available seats
+    if (trip) {
+      const active = this.data.bookings.filter(b => b.tripId === trip.id && b.status !== 'cancelled').length;
+      trip.availableSeats = Math.max(0, trip.totalSeats - active);
+    }
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Driver determines the route they want, departure time, and publishes it with departure station from their actual physical GPS location!
+  public driverLaunchTrip(data: {
+    routeId?: string;
+    customRoute?: {
+      nameAr: string;
+      startStationId: string;
+      endStationId: string;
+      intermediateStationIds?: string[];
+      price: number;
+      color?: string;
+      useCurrentLocationAsStart?: boolean;
+    };
+    useCurrentLocationAsStart?: boolean;
+    customStartStationName?: string;
+    departureTime: string;
+    price?: number;
+    initialCoords?: { lat: number; lng: number; accuracy?: number };
+  }): { success: boolean; trip?: Trip; error?: string } {
+    if (!this.currentUser) {
+      return { success: false, error: 'يجب تسجيل الدخول كسائق أولاً' };
+    }
+    if (this.currentUser.role !== 'driver') {
+      return { success: false, error: 'هذه العملية متاحة لحسابات السائقين فقط' };
+    }
+    if (this.currentUser.status !== 'active') {
+      return { success: false, error: 'حسابك كسائق ما زال قيد المراجعة وبانتظار موافقة الإدارة' };
+    }
+
+    const isStartFromGps = Boolean(
+      data.useCurrentLocationAsStart ||
+      data.customRoute?.startStationId === 'current_location' ||
+      data.customRoute?.useCurrentLocationAsStart ||
+      data.initialCoords
+    );
+
+    let gpsStartStation: TransitStation | undefined;
+    if (isStartFromGps && data.initialCoords) {
+      const lat = Number(data.initialCoords.lat.toFixed(6));
+      const lng = Number(data.initialCoords.lng.toFixed(6));
+      const startName = data.customStartStationName || `موقع السائق الفعلي (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+
+      gpsStartStation = {
+        id: `st-driver-gps-${Date.now()}`,
+        nameAr: startName,
+        area: 'نقطة انطلاق السائق الفعلية (GPS)',
+        lat,
+        lng
+      };
+
+      // Add to stations list so it's universally accessible by passengers & map
+      if (gpsStartStation) {
+        this.data.stations.unshift(gpsStartStation);
+      }
+    }
+
+    let route: TransitRoute | undefined;
+
+    if (data.customRoute) {
+      if (!data.customRoute.nameAr || !data.customRoute.nameAr.trim()) {
+        return { success: false, error: 'يرجى إدخال اسم للمسار الذي حددته' };
+      }
+      if (!data.customRoute.startStationId || !data.customRoute.endStationId) {
+        return { success: false, error: 'يرجى تحديد محطة الانطلاق ومحطة الوصول' };
+      }
+      if (data.customRoute.startStationId !== 'current_location' && data.customRoute.startStationId === data.customRoute.endStationId) {
+        return { success: false, error: 'محطة الانطلاق ومحطة الوصول يجب أن تكونا مختلفتين' };
+      }
+
+      let selectedStations: TransitStation[] = [];
+
+      if ((data.customRoute.startStationId === 'current_location' || data.useCurrentLocationAsStart) && gpsStartStation) {
+        const intermediateStations = (data.customRoute.intermediateStationIds || [])
+          .map(id => this.data.stations.find(s => s.id === id))
+          .filter((s): s is TransitStation => Boolean(s));
+        const endStation = this.data.stations.find(s => s.id === data.customRoute!.endStationId);
+        if (!endStation) {
+          return { success: false, error: 'تعذر العثور على محطة الوصول المحددة' };
+        }
+        selectedStations = [gpsStartStation, ...intermediateStations, endStation];
+      } else {
+        const allIds = [
+          data.customRoute.startStationId,
+          ...(data.customRoute.intermediateStationIds || []),
+          data.customRoute.endStationId
+        ];
+        selectedStations = allIds
+          .map(id => this.data.stations.find(s => s.id === id))
+          .filter((s): s is TransitStation => Boolean(s));
+      }
+
+      if (selectedStations.length < 2) {
+        return { success: false, error: 'تعذر العثور على محطات المسار المحددة' };
+      }
+
+      const routePrice = Math.min(8, Math.max(1, data.customRoute.price || 5));
+      const newRouteId = `rt-drv-${Date.now()}`;
+      const newRouteCode = `D${this.data.routes.length + 1}`;
+
+      const newRoute: TransitRoute = {
+        id: newRouteId,
+        code: newRouteCode,
+        nameAr: data.customRoute.nameAr.trim(),
+        color: data.customRoute.color || '#0284c7',
+        price: routePrice,
+        stations: selectedStations,
+        description: `مسار حدده الكابتن ${this.currentUser.name} من ${selectedStations[0].nameAr.split('(')[0]} إلى ${selectedStations[selectedStations.length - 1].nameAr.split('(')[0]}`
+      };
+
+      this.data.routes.push(newRoute);
+      route = newRoute;
+    } else if (data.routeId) {
+      const baseRoute = this.data.routes.find(r => r.id === data.routeId);
+      if (baseRoute) {
+        if ((data.useCurrentLocationAsStart || data.initialCoords) && gpsStartStation) {
+          // Adapt the existing route so its departure station is the driver's actual GPS location
+          const adaptedRouteId = `rt-drv-gps-${Date.now()}`;
+          const adaptedRoute: TransitRoute = {
+            ...baseRoute,
+            id: adaptedRouteId,
+            code: `${baseRoute.code}-GPS`,
+            nameAr: `${baseRoute.nameAr} (انطلاق من موقع السائق)`,
+            stations: [gpsStartStation, ...baseRoute.stations.filter(s => s.id !== gpsStartStation!.id)],
+            description: `انطلاق من موقع السائق الفعلي (${gpsStartStation.lat.toFixed(4)}, ${gpsStartStation.lng.toFixed(4)}) - ${baseRoute.description}`
+          };
+          this.data.routes.push(adaptedRoute);
+          route = adaptedRoute;
+        } else {
+          route = baseRoute;
+        }
+      }
+    }
+
+    if (!route) {
+      return { success: false, error: 'المسار المحدد غير موجود' };
+    }
+
+    const price = data.price !== undefined ? Math.min(8, Math.max(1, data.price)) : route.price;
+    if (price > 8) {
+      return { success: false, error: 'الحد الأقصى للسعر هو 8 ريال سعودي' };
+    }
+
+    const busPlate = this.currentUser.busDetails?.plateNumber || 'لوحة قيد التسجيل';
+    const busModel = this.currentUser.busDetails?.model || 'حافلة نقل جماعي';
+    const totalSeats = this.currentUser.busDetails?.seatsCount || 20;
+
+    const initialLocation = gpsStartStation ? {
+      lat: gpsStartStation.lat,
+      lng: gpsStartStation.lng,
+      speed: 0,
+      heading: 0,
+      accuracy: data.initialCoords?.accuracy || 5,
+      lastUpdated: new Date().toISOString()
+    } : (data.initialCoords ? {
+      lat: Number(data.initialCoords.lat.toFixed(6)),
+      lng: Number(data.initialCoords.lng.toFixed(6)),
+      speed: 0,
+      heading: 0,
+      accuracy: data.initialCoords.accuracy || 5,
+      lastUpdated: new Date().toISOString()
+    } : (route.stations[0] ? {
+      lat: route.stations[0].lat,
+      lng: route.stations[0].lng,
+      lastUpdated: new Date().toISOString()
+    } : undefined));
+
+    const newTrip: Trip = {
+      id: `trp-${Date.now()}`,
+      routeId: route.id,
+      routeName: `مسار ${route.code}: ${route.nameAr}`,
+      routeColor: route.color,
+      price,
+      driverId: this.currentUser.id,
+      driverName: this.currentUser.name,
+      driverPhone: this.currentUser.phone,
+      busPlate,
+      busModel,
+      totalSeats,
+      availableSeats: totalSeats,
+      departureTime: data.departureTime,
+      status: 'scheduled',
+      currentLocation: initialLocation
+    };
+
+    this.data.trips.unshift(newTrip);
+    this.saveData(this.data);
+    return { success: true, trip: newTrip };
+  }
+
+  public getDriverTrips(driverId?: string): Trip[] {
+    const id = driverId || (this.currentUser?.role === 'driver' ? this.currentUser.id : undefined);
+    if (!id) return [];
+    return this.data.trips
+      .filter(t => t.driverId === id)
+      .sort((a, b) => new Date(a.departureTime).getTime() - new Date(b.departureTime).getTime());
+  }
+
+  public getTripPassengers(tripId: string): Booking[] {
+    return this.data.bookings.filter(b => b.tripId === tripId && b.status !== 'cancelled');
+  }
+
+  public startTrip(tripId: string, initialCoords?: { lat: number; lng: number; speed?: number; heading?: number; accuracy?: number }): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
+      return { success: false, error: 'فقط السائق المكلف بهذه الرحلة يمكنه بدؤها' };
+    }
+
+    if (trip.status === 'in_progress') {
+      return { success: false, error: 'الرحلة جارية بالفعل' };
+    }
+    if (trip.status === 'completed' || trip.status === 'cancelled') {
+      return { success: false, error: 'لا يمكن بدء رحلة منتهية أو ملغية' };
+    }
+
+    trip.status = 'in_progress';
+    if (initialCoords && typeof initialCoords.lat === 'number' && typeof initialCoords.lng === 'number') {
+      const lat = Number(initialCoords.lat.toFixed(6));
+      const lng = Number(initialCoords.lng.toFixed(6));
+      trip.currentLocation = {
+        lat,
+        lng,
+        speed: initialCoords.speed || 0,
+        heading: initialCoords.heading || 0,
+        accuracy: initialCoords.accuracy || 5,
+        lastUpdated: new Date().toISOString()
+      };
+
+      // Ensure the route departure station coordinates and label reflect this physical location
+      const route = this.data.routes.find(r => r.id === trip.routeId);
+      if (route && route.stations && route.stations.length > 0) {
+        if (route.stations[0].id.includes('gps')) {
+          route.stations[0].lat = lat;
+          route.stations[0].lng = lng;
+          route.stations[0].nameAr = `موقع السائق الفعلي (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+        }
+      }
+    } else if (!trip.currentLocation) {
+      trip.currentLocation = {
+        lat: 25.3835,
+        lng: 49.5862,
+        lastUpdated: new Date().toISOString()
+      };
+    } else {
+      trip.currentLocation.lastUpdated = new Date().toISOString();
+    }
+
+    this.saveData(this.data);
+    if (trip.currentLocation) {
+      this.broadcastDriverGps(
+        trip.id,
+        trip.currentLocation.lat,
+        trip.currentLocation.lng,
+        trip.currentLocation.speed || 0,
+        trip.currentLocation.heading || 0,
+        trip.currentLocation.accuracy || 5,
+        trip.driverId
+      );
+    }
+    return { success: true };
+  }
+
+  public updateBusLocation(tripId: string, lat: number, lng: number): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    if (trip.status !== 'in_progress') {
+      return { success: false, error: 'يمكن تحديث الموقع فقط للرحلات الجارية' };
+    }
+
+    trip.currentLocation = {
+      lat,
+      lng,
+      lastUpdated: new Date().toISOString()
+    };
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Confirm Boarding during in_progress trip only & for confirmed booking only
+  public confirmBoarding(tripId: string, bookingId: string): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    // Security: Restricted to assigned driver
+    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
+      return { success: false, error: 'تأكيد الصعود مقصور على سائق الرحلة نفسه' };
+    }
+
+    // Must be in_progress
+    if (trip.status !== 'in_progress') {
+      return { success: false, error: 'لا يمكن تأكيد الصعود إلا أثناء الرحلة الجارية' };
+    }
+
+    const booking = this.data.bookings.find(b => b.id === bookingId && b.tripId === tripId);
+    if (!booking) return { success: false, error: 'بيانات الحجز غير موجودة في هذه الرحلة' };
+
+    if (booking.status !== 'confirmed') {
+      return { success: false, error: `لا يمكن تأكيد الصعود لحجز بحالة (${booking.status})` };
+    }
+
+    booking.status = 'boarded';
+    booking.boardedAt = new Date().toISOString();
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Finish Trip -> non-boarded passengers become no_show
+  public finishTrip(tripId: string): { success: boolean; error?: string; boardedCount?: number; noShowCount?: number } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
+      return { success: false, error: 'فقط سائق الرحلة يمكنه إنهاؤها' };
+    }
+
+    if (trip.status !== 'in_progress') {
+      return { success: false, error: 'الرحلة ليست جارية لكي يتم إنهاؤها' };
+    }
+
+    trip.status = 'completed';
+
+    let boardedCount = 0;
+    let noShowCount = 0;
+
+    // Automatic no_show transition for remaining confirmed bookings
+    this.data.bookings.forEach(b => {
+      if (b.tripId === tripId) {
+        if (b.status === 'confirmed') {
+          b.status = 'no_show';
+          noShowCount++;
+        } else if (b.status === 'boarded') {
+          boardedCount++;
+        }
+      }
+    });
+
+    this.saveData(this.data);
+    return { success: true, boardedCount, noShowCount };
+  }
+
+  // Requirement: Cancel trip -> cancels all its bookings
+  public cancelTrip(tripId: string): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    if (
+      this.currentUser &&
+      this.currentUser.role === 'driver' &&
+      trip.driverId !== this.currentUser.id
+    ) {
+      return { success: false, error: 'فقط سائق هذه الرحلة أو الإدارة يمكنه إلغاؤها' };
+    }
+
+    trip.status = 'cancelled';
+
+    this.data.bookings.forEach(b => {
+      if (b.tripId === tripId && b.status !== 'boarded') {
+        b.status = 'cancelled';
+      }
+    });
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  public deleteTrip(tripId: string): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+    if (trip.status === 'in_progress') {
+      return { success: false, error: 'لا يمكن حذف رحلة جارية حالياً على الطريق' };
+    }
+    this.data.bookings.forEach(b => {
+      if (b.tripId === tripId && b.status !== 'boarded') {
+        b.status = 'cancelled';
+      }
+    });
+    this.data.trips = this.data.trips.filter(t => t.id !== tripId);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // ---------------- ADMIN FEATURES ----------------
+  public getAdminStats(): AdminStats {
+    const totalTrips = this.data.trips.length;
+    const totalBookings = this.data.bookings.length;
+
+    // Occupancy rate
+    const totalSeats = this.data.trips.reduce((acc, t) => acc + (t.totalSeats || 0), 0);
+    const occupiedSeats = this.data.bookings.filter(b => b.status === 'confirmed' || b.status === 'boarded').length;
+    const occupancyRate = totalSeats > 0 ? Math.round((occupiedSeats / totalSeats) * 100) : 0;
+
+    // Revenue strictly from BOARDED passengers!
+    const realRevenue = this.data.bookings
+      .filter(b => b.status === 'boarded')
+      .reduce((sum, b) => sum + (b.price || 0), 0);
+
+    const pendingDrivers = this.data.users.filter(u => u.role === 'driver' && u.status === 'pending').length;
+    const activeTripsCount = this.data.trips.filter(t => t.status === 'in_progress').length;
+
+    return {
+      totalTrips,
+      totalBookings,
+      occupancyRate,
+      realRevenue,
+      pendingDrivers,
+      activeTripsCount
+    };
+  }
+
+  public getDrivers(): User[] {
+    return this.data.users.filter(u => u.role === 'driver');
+  }
+
+  public approveDriver(driverId: string): { success: boolean; error?: string } {
+    const driver = this.data.users.find(u => u.id === driverId && u.role === 'driver');
+    if (!driver) return { success: false, error: 'السائق غير موجود' };
+    driver.status = 'active';
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  public rejectDriver(driverId: string): { success: boolean; error?: string } {
+    const driver = this.data.users.find(u => u.id === driverId && u.role === 'driver');
+    if (!driver) return { success: false, error: 'السائق غير موجود' };
+    driver.status = 'rejected';
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  public updateDriver(driverId: string, updates: {
+    name: string;
+    phone: string;
+    plateNumber: string;
+    model: string;
+    seatsCount: number;
+    busType: string;
+  }): { success: boolean; error?: string } {
+    const driver = this.data.users.find(u => u.id === driverId && u.role === 'driver');
+    if (!driver) return { success: false, error: 'السائق غير موجود' };
+
+    driver.name = updates.name.trim();
+    driver.phone = updates.phone.trim();
+    driver.busDetails = {
+      plateNumber: updates.plateNumber.trim(),
+      model: updates.model.trim(),
+      seatsCount: Number(updates.seatsCount) || 20,
+      busType: updates.busType.trim()
+    };
+
+    // Update related trips
+    this.data.trips.forEach(t => {
+      if (t.driverId === driverId) {
+        t.driverName = driver.name;
+        t.driverPhone = driver.phone;
+        t.busPlate = updates.plateNumber;
+        t.busModel = updates.model;
+        t.totalSeats = Number(updates.seatsCount) || 20;
+      }
+    });
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Deletion cancels upcoming trips & bookings. Denied if has trip in_progress!
+  public deleteDriver(driverId: string): { success: boolean; error?: string } {
+    const hasActiveTrip = this.data.trips.some(t => t.driverId === driverId && t.status === 'in_progress');
+    if (hasActiveTrip) {
+      return { success: false, error: 'لا يمكن حذف السائق نظراً لوجود رحلة جارية حالياً له على الطريق!' };
+    }
+
+    // Cancel upcoming trips and bookings
+    this.data.trips.forEach(t => {
+      if (t.driverId === driverId && t.status === 'scheduled') {
+        t.status = 'cancelled';
+        this.data.bookings.forEach(b => {
+          if (b.tripId === t.id && b.status === 'confirmed') {
+            b.status = 'cancelled';
+          }
+        });
+      }
+    });
+
+    // Remove user
+    this.data.users = this.data.users.filter(u => u.id !== driverId);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Admin can view and delete passengers
+  public getPassengers(): User[] {
+    return this.data.users.filter(u => u.role === 'passenger');
+  }
+
+  public deletePassenger(passengerId: string): { success: boolean; error?: string } {
+    const passenger = this.data.users.find(u => u.id === passengerId && u.role === 'passenger');
+    if (!passenger) return { success: false, error: 'الراكب غير موجود' };
+
+    // Cancel active bookings for this passenger
+    this.data.bookings.forEach(b => {
+      if (b.passengerId === passengerId && (b.status === 'confirmed' || b.status === 'boarded')) {
+        b.status = 'cancelled';
+      }
+    });
+
+    // Remove user
+    this.data.users = this.data.users.filter(u => u.id !== passengerId);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Explicit trigger to refresh all components and reload from storage
+  public triggerRefresh() {
+    this.data = this.loadData();
+    this.notify();
+  }
+
+  // Routes Management (Price limit <= 8 SAR)
+  public getRoutes(): TransitRoute[] {
+    return this.data.routes;
+  }
+
+  public getStations(): TransitStation[] {
+    return this.data.stations;
+  }
+
+  public addStation(nameAr: string, area: string, lat: number, lng: number): TransitStation {
+    const newStation: TransitStation = {
+      id: `st-${Date.now()}`,
+      nameAr: nameAr.trim(),
+      area: area.trim(),
+      lat,
+      lng
+    };
+    this.data.stations.push(newStation);
+    this.saveData(this.data);
+    return newStation;
+  }
+
+  public createRoute(code: string, nameAr: string, color: string, price: number, stationIds: string[], description: string): {
+    success: boolean;
+    route?: TransitRoute;
+    error?: string;
+  } {
+    if (price > 8) {
+      return { success: false, error: 'الحد الأقصى لسعر أي مسار هو 8 ريال سعودي وفق اللائحة' };
+    }
+    if (stationIds.length < 2) {
+      return { success: false, error: 'يجب اختيار محطتين على الأقل للمسار' };
+    }
+
+    const stations = stationIds
+      .map(id => this.data.stations.find(s => s.id === id))
+      .filter(Boolean) as TransitStation[];
+
+    const newRoute: TransitRoute = {
+      id: `rt-${Date.now()}`,
+      code: code.trim() || `${Math.floor(100 + Math.random() * 900)}`,
+      nameAr: nameAr.trim(),
+      color: color || '#0284c7',
+      price: Math.min(8, Math.max(1, price)),
+      stations,
+      description: description.trim()
+    };
+
+    this.data.routes.push(newRoute);
+    this.saveData(this.data);
+    return { success: true, route: newRoute };
+  }
+
+  public updateRoute(id: string, updates: Partial<TransitRoute>): { success: boolean; error?: string } {
+    const route = this.data.routes.find(r => r.id === id);
+    if (!route) return { success: false, error: 'المسار غير موجود' };
+
+    if (updates.price !== undefined && updates.price > 8) {
+      return { success: false, error: 'سعر المسار لا يمكن أن يتجاوز 8 ريال' };
+    }
+
+    Object.assign(route, updates);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  public deleteRoute(id: string): { success: boolean; error?: string } {
+    const hasScheduledTrips = this.data.trips.some(t => t.routeId === id && (t.status === 'scheduled' || t.status === 'in_progress'));
+    if (hasScheduledTrips) {
+      return { success: false, error: 'لا يمكن حذف المسار لوجود رحلات مجدولة أو جارية عليه' };
+    }
+
+    this.data.routes = this.data.routes.filter(r => r.id !== id);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Requirement: Create trip -> driver, route, time selected. Bus and price automatically populated!
+  public createTrip(driverId: string, routeId: string, departureTime: string): { success: boolean; trip?: Trip; error?: string } {
+    const driver = this.data.users.find(u => u.id === driverId && u.role === 'driver');
+    if (!driver || driver.status !== 'active') {
+      return { success: false, error: 'السائق المحدد غير مفعل أو غير موجود' };
+    }
+
+    const route = this.data.routes.find(r => r.id === routeId);
+    if (!route) {
+      return { success: false, error: 'المسار المحدد غير موجود' };
+    }
+
+    // Auto populated from driver and route!
+    const busPlate = driver.busDetails?.plateNumber || 'لوحة غير مسجلة';
+    const busModel = driver.busDetails?.model || 'حافلة نقل عام';
+    const totalSeats = driver.busDetails?.seatsCount || 20;
+    const price = route.price; // Auto populated from route (<= 8 SAR)
+
+    const newTrip: Trip = {
+      id: `trp-${Date.now()}`,
+      routeId: route.id,
+      routeName: `مسار ${route.code}: ${route.nameAr}`,
+      routeColor: route.color,
+      price,
+      driverId: driver.id,
+      driverName: driver.name,
+      driverPhone: driver.phone,
+      busPlate,
+      busModel,
+      totalSeats,
+      availableSeats: totalSeats,
+      departureTime,
+      status: 'scheduled',
+      currentLocation: route.stations[0] ? {
+        lat: route.stations[0].lat,
+        lng: route.stations[0].lng,
+        lastUpdated: new Date().toISOString()
+      } : undefined
+    };
+
+    this.data.trips.push(newTrip);
+    this.saveData(this.data);
+    return { success: true, trip: newTrip };
+  }
+
+  // Admin Bookings Management: Edit destination, seat, status, cancel
+  public getAllBookings(): Booking[] {
+    return this.data.bookings;
+  }
+
+  public updateBookingByAdmin(bookingId: string, updates: Partial<Booking>): { success: boolean; error?: string } {
+    const booking = this.data.bookings.find(b => b.id === bookingId);
+    if (!booking) return { success: false, error: 'الحجز غير موجود' };
+
+    Object.assign(booking, updates);
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  // Support & Announcements
+  public getSupportTickets(): SupportTicket[] {
+    return this.data.tickets;
+  }
+
+  public createSupportTicket(subject: string, message: string): SupportTicket {
+    const newTicket: SupportTicket = {
+      id: `spt-${Date.now()}`,
+      userId: this.currentUser?.id || 'guest',
+      userName: this.currentUser?.name || 'مستخدم',
+      userPhone: this.currentUser?.phone || '',
+      subject: subject.trim(),
+      message: message.trim(),
+      status: 'open',
+      createdAt: new Date().toISOString()
+    };
+    this.data.tickets.unshift(newTicket);
+    this.saveData(this.data);
+    return newTicket;
+  }
+
+  public replyAndCloseTicket(ticketId: string, reply: string): { success: boolean; error?: string } {
+    const ticket = this.data.tickets.find(t => t.id === ticketId);
+    if (!ticket) return { success: false, error: 'التذكرة غير موجودة' };
+    ticket.adminReply = reply.trim();
+    ticket.status = 'closed';
+    this.saveData(this.data);
+    return { success: true };
+  }
+
+  public getAnnouncement(): Announcement {
+    return this.data.announcement;
+  }
+
+  public updateAnnouncement(text: string, active: boolean): Announcement {
+    this.data.announcement = {
+      id: `ann-${Date.now()}`,
+      text: text.trim(),
+      active,
+      publishedAt: new Date().toISOString()
+    };
+    this.saveData(this.data);
+    return this.data.announcement;
+  }
+
+  public getAllTrips(): Trip[] {
+    return this.data.trips;
+  }
+
+  public resetToDefault() {
+    localStorage.removeItem(STORAGE_KEY);
+    this.data = this.loadData();
+    this.notify();
+  }
+}
+
+export const transitStore = new TransitStore();

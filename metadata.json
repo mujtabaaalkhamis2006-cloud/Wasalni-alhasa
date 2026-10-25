@@ -1,0 +1,8 @@
+{
+  "name": "حافلات الأحساء | Al-Ahsa Buses Transit",
+  "description": "منصة النقل العام وحجز حافلات الأحساء للركاب والسائقين والإدارة مع تتبع حي ومسارات تفاعلية",
+  "requestFramePermissions": [
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

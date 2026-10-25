@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>تقرير مشروع التخرج - منظومة حافلات الأحساء الذكية</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      font-family: 'Tajawal', sans-serif;
+    }
+    @media print {
+      .no-print {
+        display: none !important;
+      }
+      body {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+        font-size: 12pt;
+      }
+      .page-break {
+        page-break-before: always;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen py-10 px-4 sm:px-8 print:bg-white print:text-black print:p-0">
+
+  <!-- Floating Print & Export Bar (Screen Only) -->
+  <div class="no-print max-w-5xl mx-auto mb-8 bg-slate-900 border border-slate-800 rounded-3xl p-4 sm:p-5 shadow-2xl flex flex-wrap items-center justify-between gap-4 sticky top-4 z-50 backdrop-blur-md">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-2xl bg-gradient-to-tr from-sky-600 to-emerald-500 flex items-center justify-center text-white shadow-lg shadow-sky-600/30">
+        🎓
+      </div>
+      <div>
+        <h1 class="text-sm sm:text-base font-black text-white">
+          ملف مشروع التخرج الأكاديمي (مُجهّز للأستاذ والمناقشة)
+        </h1>
+        <p class="text-xs text-slate-400">
+          منظومة حافلات الأحساء للنقل العام الذكي · وثيقة التوثيق الهندسي والبرمجي الشامل
+        </p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <button onclick="window.print()" class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 to-emerald-600 hover:from-sky-500 hover:to-emerald-500 text-white font-bold text-xs shadow-lg shadow-sky-600/20 transition-all flex items-center gap-2 cursor-pointer active:scale-95">
+        <span>🖨️</span>
+        <span>طباعة التقرير / حفظ بصيغة PDF للأستاذ</span>
+      </button>
+      <a href="/" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-all">
+        العودة للتطبيق ↗
+      </a>
+    </div>
+  </div>
+
+  <!-- Document Paper Container -->
+  <main class="max-w-5xl mx-auto bg-slate-900 print:bg-white border border-slate-800 print:border-none rounded-3xl p-6 sm:p-14 shadow-2xl print:shadow-none space-y-12">
+
+    <!-- Academic Cover Page Header -->
+    <header class="border-b-2 border-slate-800 print:border-slate-300 pb-8 space-y-6">
+      <div class="flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400 print:text-slate-600">
+        <div>
+          <div class="font-bold text-white print:text-black">المملكة العربية السعودية</div>
+          <div>وزارة التعليم / المؤسسة العامة للتدريب التقني والمهني</div>
+          <div>الكلية التقنية ومجمع الكليات بالأحساء</div>
+        </div>
+        <div class="text-left font-mono">
+          <div>مشروع تخرج لنيل درجة التخرج</div>
+          <div>العام الأكاديمي: 1447 - 1448 هـ / 2026 م</div>
+          <div>القسم: تقنية الحاسب والمعلومات</div>
+        </div>
+      </div>
+
+      <div class="text-center py-6 space-y-3">
+        <span class="inline-block px-3 py-1 rounded-full bg-sky-950/80 border border-sky-500/40 text-sky-400 text-xs font-bold print:border-slate-300 print:bg-slate-100 print:text-black">
+          تقرير التوثيق الهندسي لمشروع التخرج النهائي
+        </span>
+        <h1 class="text-3xl sm:text-4xl font-black text-white print:text-black">
+          منظومة حافلات الأحساء الذكية للنقل العام
+        </h1>
+        <p class="text-base text-slate-300 print:text-slate-700 max-w-2xl mx-auto font-medium">
+          نظام سحابي متكامل يربط الركاب والطلاب والسائقين وإدارة العمليات، مع ميزة التتبع الراداري الحي بالـ GPS وحساب أقرب محطة عبر Geolocation ونظام دعم فني شامل.
+        </p>
+      </div>
+
+      <!-- Submission Info Cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 p-4 rounded-2xl bg-slate-800/60 print:bg-slate-50 border border-slate-700/60 print:border-slate-300 text-xs">
+        <div>
+          <span class="text-slate-400 print:text-slate-500 block">إشراف الأستاذ المشرف:</span>
+          <span class="font-bold text-white print:text-black text-sm">سعادة الأستاذ / المشرف الأكاديمي</span>
+        </div>
+        <div>
+          <span class="text-slate-400 print:text-slate-500 block">إعداد وتطوير:</span>
+          <span class="font-bold text-white print:text-black text-sm">طالب مشروع التخرج</span>
+        </div>
+        <div>
+          <span class="text-slate-400 print:text-slate-500 block">التخصص العلمي:</span>
+          <span class="font-bold text-white print:text-black text-sm">هندسة البرمجيات وتطوير الويب</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- SECTION 1: OVERVIEW & PROBLEM STATEMENT -->
+    <section class="space-y-4">
+      <div class="flex items-center gap-2 text-sky-400 print:text-sky-800 font-black text-lg border-b border-slate-800 print:border-slate-200 pb-2">
+        <span>📋</span>
+        <h2>الفصل الأول: نظرة عامة، مبررات وأهداف المشروع</h2>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs leading-relaxed text-slate-300 print:text-slate-700">
+        <div class="p-4 rounded-2xl bg-slate-800/40 print:bg-slate-50 border border-slate-800 print:border-slate-200 space-y-2">
+          <h3 class="font-bold text-white print:text-black text-sm">1.1 مشكلة الدراسة ومبرراتها</h3>
+          <p>
+            تتميز محافظة الأحساء باتساع مساحتها وتباعد مراكزها التعليمية والتجارية (مجمع الكلية التقنية، جامعة الملك فيصل، محطة قطار سار، سوق القيصرية، العثيم مول، جبل القارة، ومطار الأحساء). وكان يعاني الركاب والطلاب من عدم دقة مواعيد الحافلات، وعدم توفر وسيلة لحجز المقعد مسبقاً، وصعوبة معرفة أقرب محطة حافلات لهم في اللحظة الراهنة، مع غياب تتبع حي لحركة الحافلة.
+          </p>
+        </div>
+
+        <div class="p-4 rounded-2xl bg-slate-800/40 print:bg-slate-50 border border-slate-800 print:border-slate-200 space-y-2">
+          <h3 class="font-bold text-white print:text-black text-sm">1.2 الحل المبتكر والأهداف</h3>
+          <p>
+            تم تطوير تطبيق ويب تقدمي (PWA) فائق السرعة والأمان، يُمكّن الراكب من: (1) معرفة أقرب محطة حافلات بالـ GPS وحساب مسافة السير بدقة، (2) حجز المقعد برقم مقعد مخصص وسقف أسعار لا يتجاوز 8 ر.س، (3) تتبع حركة الحافلة اللحظية وسرعتها ووقت وصولها التقديري، (4) مركز مساعدة ودعم فني متكامل للشكاوى والاستفسارات.
+          </p>
+        </div>
+      </div>
+
+      <!-- Target Stakeholders -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 text-xs">
+        <div class="p-3.5 rounded-2xl bg-sky-950/30 print:bg-slate-100 border border-sky-900/50 print:border-slate-300">
+          <div class="font-bold text-sky-400 print:text-black mb-1">1. الركاب والطلاب</div>
+          <p class="text-slate-400 print:text-slate-600 text-[11px]">حجز المقاعد الفوري، معرفة أقرب محطة، التتبع الراداري، وتذاكر رقمية ذكية.</p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-amber-950/30 print:bg-slate-100 border border-amber-900/50 print:border-slate-300">
+          <div class="font-bold text-amber-400 print:text-black mb-1">2. السائقون المعتمدون</div>
+          <p class="text-slate-400 print:text-slate-600 text-[11px]">تسجيل بيانات الحافلة، إطلاق الرحلات، بث الإحداثيات الحية، وتأكيد صعود الركاب.</p>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-rose-950/30 print:bg-slate-100 border border-rose-900/50 print:border-slate-300">
+          <div class="font-bold text-rose-400 print:text-black mb-1">3. إدارة العمليات</div>
+          <p class="text-slate-400 print:text-slate-600 text-[11px]">اعتماد السائقين، مراقبة الإيرادات، تسجيل اسم المدير، وإصدار الإعلانات وتذاكر الدعم.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2: APP UI SCREENSHOT & MOCKUP -->
+    <section class="space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 print:border-slate-200 pb-2">
+        <div class="flex items-center gap-2 text-sky-400 print:text-sky-800 font-black text-lg">
+          <span>📱</span>
+          <h2>الفصل الثاني: صور وواجهات التطبيق الرئيسي وتتبع الحافلات</h2>
+        </div>
+        <span class="text-[11px] text-slate-400 bg-slate-800 print:bg-slate-100 px-2.5 py-1 rounded-full">
+          الشكل 1: واجهة الركاب والخريطة الرادارية الحية
+        </span>
+      </div>
+
+      <p class="text-xs text-slate-300 print:text-slate-700 leading-relaxed">
+        يوضح النموذج التالي الشاشة الرئيسية للتطبيق، وتتضمن الخريطة الحية لواحة الأحساء، محطات النقل المعتمدة، الحافلات الجارية على الطريق، ورادار التتبع الحي:
+      </p>
+
+      <!-- High Fidelity Vector UI Mockup -->
+      <div class="rounded-3xl border-2 border-sky-500/40 print:border-slate-400 bg-slate-950 print:bg-white overflow-hidden shadow-2xl">
+        <div class="p-3 bg-slate-900 print:bg-slate-100 border-b border-slate-800 print:border-slate-300 flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-rose-500 inline-block"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-amber-500 inline-block"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+            <span class="font-mono text-[11px] text-slate-400 mr-2">https://al-ahsa-buses-transit.ai.studio</span>
+          </div>
+          <span class="text-sky-400 font-bold text-[10px] bg-sky-950 px-2 py-0.5 rounded-full border border-sky-800">
+            لوحة تحكم الراكب
+          </span>
+        </div>
+
+        <div class="p-6 space-y-4 text-xs">
+          <!-- Active Radar Alert Box -->
+          <div class="p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/80 via-slate-900 to-sky-950/80 border border-amber-500/50 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center font-black">
+                🚌
+              </div>
+              <div>
+                <div class="font-black text-white print:text-black flex items-center gap-2">
+                  <span>رادار تتبع حركة الحافلة المباشر: مسار الكلية والجامعة (101)</span>
+                  <span class="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded font-black">متحركة الآن</span>
+                </div>
+                <div class="text-[11px] text-slate-300 print:text-slate-600 mt-0.5">
+                  السائق: فهد السالم · اللوحة: أ ح س 1024 · السرعة: 42 كم/س · تبعد عنك: 850 متر (~2 دقيقة)
+                </div>
+              </div>
+            </div>
+            <span class="px-3 py-1 rounded-xl bg-amber-500 text-slate-950 font-black text-[10px]">
+              قفل التتبع نشط 🎯
+            </span>
+          </div>
+
+          <!-- Vector Map Canvas Preview -->
+          <div class="relative h-64 rounded-2xl bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border border-slate-800 overflow-hidden flex items-center justify-center">
+            <svg class="absolute inset-0 w-full h-full">
+              <!-- Route Lines -->
+              <path d="M 60 180 Q 180 120 300 140 T 480 80" fill="none" stroke="#0284c7" stroke-width="4" stroke-dasharray="6 3"></path>
+              <path d="M 120 220 Q 240 180 340 190 T 520 150" fill="none" stroke="#059669" stroke-width="3.5"></path>
+              <line x1="300" y1="140" x2="350" y2="80" stroke="#f59e0b" stroke-width="2.5" stroke-dasharray="4 3"></line>
+            </svg>
+
+            <!-- Stations Markers -->
+            <div class="absolute left-[15%] top-[65%] text-center">
+              <div class="w-3.5 h-3.5 rounded-full bg-sky-500 border-2 border-white shadow-lg mx-auto"></div>
+              <span class="text-[9px] text-slate-300 bg-slate-950/80 px-1 rounded">جامعة الملك فيصل</span>
+            </div>
+
+            <div class="absolute left-[38%] top-[50%] text-center">
+              <div class="w-3.5 h-3.5 rounded-full bg-amber-400 border-2 border-white ring-4 ring-amber-400/40 shadow-lg mx-auto"></div>
+              <span class="text-[9px] text-amber-300 font-bold bg-amber-950/90 px-1 rounded">الكلية التقنية ومجمع الكليات</span>
+            </div>
+
+            <div class="absolute left-[62%] top-[45%] text-center">
+              <div class="w-3.5 h-3.5 rounded-full bg-emerald-500 border-2 border-white shadow-lg mx-auto"></div>
+              <span class="text-[9px] text-slate-300 bg-slate-950/80 px-1 rounded">محطة قطار سار الأحساء</span>
+            </div>
+
+            <!-- Moving Bus Indicator -->
+            <div class="absolute left-[44%] top-[48%] -translate-x-1/2 -translate-y-1/2 text-center animate-pulse">
+              <div class="w-8 h-8 rounded-full bg-gradient-to-tr from-amber-400 to-amber-600 text-slate-950 border-2 border-white shadow-2xl flex items-center justify-center font-bold text-xs">
+                🚌
+              </div>
+              <span class="text-[9px] font-black text-amber-300 bg-slate-950 px-1.5 py-0.5 rounded-full border border-amber-500/50 shadow">
+                حافلة #101 متحركة
+              </span>
+            </div>
+
+            <!-- User GPS Location Pin -->
+            <div class="absolute left-[52%] top-[25%] -translate-x-1/2 -translate-y-1/2 text-center">
+              <div class="w-7 h-7 rounded-full bg-cyan-500 text-white border-2 border-white shadow-xl flex items-center justify-center text-xs">
+                📍
+              </div>
+              <span class="text-[9px] font-bold text-cyan-300 bg-slate-950 px-1 rounded border border-cyan-400/50">
+                موقعك الحالي (GPS)
+              </span>
+            </div>
+          </div>
+
+          <!-- Trip Cards Row -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+            <div class="p-3 rounded-xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-200 flex items-center justify-between">
+              <div>
+                <div class="font-bold text-white print:text-black">مسار الجامعة والكلية والقطار (101)</div>
+                <div class="text-[11px] text-slate-400">انطلاق: 06:30 ص · السائق: فهد السالم</div>
+              </div>
+              <div class="text-left">
+                <span class="text-base font-black text-amber-400">5 ر.س</span>
+                <span class="block text-[10px] bg-sky-600 text-white px-2 py-0.5 rounded font-bold mt-0.5">حجز مقعد</span>
+              </div>
+            </div>
+
+            <div class="p-3 rounded-xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-200 flex items-center justify-between">
+              <div>
+                <div class="font-bold text-white print:text-black">شريان المبرز والهفوف (202)</div>
+                <div class="text-[11px] text-slate-400">انطلاق: 07:00 ص · السائق: علي المحمد</div>
+              </div>
+              <div class="text-left">
+                <span class="text-base font-black text-amber-400">4 ر.س</span>
+                <span class="block text-[10px] bg-amber-500 text-slate-950 px-2 py-0.5 rounded font-bold mt-0.5">تتبع الباص</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 3: HELP CENTER UI -->
+    <section class="space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 print:border-slate-200 pb-2">
+        <div class="flex items-center gap-2 text-sky-400 print:text-sky-800 font-black text-lg">
+          <span>🎧</span>
+          <h2>الفصل الثالث: صور وواجهات مركز المساعدة والدعم الفني</h2>
+        </div>
+        <span class="text-[11px] text-slate-400 bg-slate-800 print:bg-slate-100 px-2.5 py-1 rounded-full">
+          الشكل 2: نظام تذاكر الاستفسارات والأسئلة الشائعة
+        </span>
+      </div>
+
+      <p class="text-xs text-slate-300 print:text-slate-700 leading-relaxed">
+        يوضح النموذج التالي بوابة مركز المساعدة التفاعلية المخصصة لخدمة الركاب وحل الشكاوى وتتبع الاستفسارات:
+      </p>
+
+      <!-- High Fidelity Help Center Mockup -->
+      <div class="rounded-3xl border-2 border-emerald-500/40 print:border-slate-400 bg-slate-950 print:bg-white overflow-hidden shadow-2xl">
+        <div class="p-3 bg-slate-900 print:bg-slate-100 border-b border-slate-800 print:border-slate-300 flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block"></span>
+            <span class="font-bold text-white print:text-black">مركز المساعدة والدعم الفني والشكاوى</span>
+          </div>
+          <span class="text-[10px] text-emerald-400 bg-emerald-950 px-2 py-0.5 rounded-full border border-emerald-800 font-bold">
+            نظام تذاكر حي 24/7
+          </span>
+        </div>
+
+        <div class="p-6 space-y-4 text-xs">
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <!-- FAQs -->
+            <div class="space-y-2.5">
+              <h3 class="font-black text-white print:text-black text-sm mb-2">الأسئلة الشائعة والإرشادات (FAQ)</h3>
+
+              <div class="p-3 rounded-xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-200">
+                <div class="font-bold text-sky-300 print:text-black">س: ما هو سقف أسعار تذاكر الحافلات في الأحساء؟</div>
+                <p class="text-[11px] text-slate-400 print:text-slate-600 mt-1">ج: أسعار التذاكر رمزية تبدأ من 4 ر.س إلى 8 ر.س كحد أقصى لكافة مسارات ومحطات الأحساء.</p>
+              </div>
+
+              <div class="p-3 rounded-xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-200">
+                <div class="font-bold text-sky-300 print:text-black">س: كيف يمكنني تتبع موقع الحافلة أثناء سيرها؟</div>
+                <p class="text-[11px] text-slate-400 print:text-slate-600 mt-1">ج: بالضغط على زر "تتبع الباص" في بطاقة الرحلة، يظهر رادار حي يرسم مسار الحافلة والمسافة بينك وبينها بدقة.</p>
+              </div>
+
+              <div class="p-3 rounded-xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-200">
+                <div class="font-bold text-sky-300 print:text-black">س: هل أستطيع إلغاء حجز المقعد واسترجاع المقعد؟</div>
+                <p class="text-[11px] text-slate-400 print:text-slate-600 mt-1">ج: نعم، قبل انطلاق الرحلة يمكنك الضغط على "إلغاء الحجز" في تبويب "حجوزاتي" ليتاح المقعد لراكب آخر فوراً.</p>
+              </div>
+            </div>
+
+            <!-- Ticketing System -->
+            <div class="space-y-2.5">
+              <h3 class="font-black text-white print:text-black text-sm mb-2">سجل تذاكر الاستفسارات (Support Tickets)</h3>
+
+              <div class="p-3.5 rounded-xl bg-slate-900 print:bg-slate-50 border border-emerald-500/40 print:border-slate-300 space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="font-bold text-white print:text-black">تذكرة رقم #TCK-892</span>
+                  <span class="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-2 py-0.5 rounded-full font-bold">
+                    تم الرد والإغلاق ✓
+                  </span>
+                </div>
+                <div class="text-[11px] text-slate-300 print:text-slate-700">
+                  <strong>الموضوع:</strong> الاستفسار عن محطة مجمع الكليات والكلية التقنية
+                </div>
+                <div class="p-2.5 rounded-lg bg-slate-800/80 print:bg-slate-200 text-[11px] text-slate-300 print:text-slate-800 border-r-2 border-emerald-400">
+                  <strong>رد إدارة العمليات:</strong> مرحباً بك، تم تخصيص محطة الكلية التقنية رسمياً ضمن الخطين الأزرق (101) والأخضر (202) بمعدل رحلة كل نصف ساعة.
+                </div>
+              </div>
+
+              <div class="p-3 rounded-xl bg-slate-900/60 print:bg-slate-50 border border-slate-800 print:border-slate-200 text-[11px] text-slate-400 print:text-slate-600">
+                💡 يتيح النظام للإدارة الرد على الشكاوى والبلاغات وإغلاق التذاكر مع إشعار المستخدم فورياً.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 4: SYSTEM MECHANISM & FLOWCHART -->
+    <section class="space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-800 print:border-slate-200 pb-2">
+        <div class="flex items-center gap-2 text-sky-400 print:text-sky-800 font-black text-lg">
+          <span>⚙️</span>
+          <h2>الفصل الرابع: مخطط آلية عمل وهندسة النظام (System Mechanism & Architecture)</h2>
+        </div>
+        <span class="text-[11px] text-slate-400 bg-slate-800 print:bg-slate-100 px-2.5 py-1 rounded-full">
+          الشكل 3: معمارية وتدفق البيانات
+        </span>
+      </div>
+
+      <p class="text-xs text-slate-300 print:text-slate-700 leading-relaxed">
+        يوضح المخطط الهيكلي التالي آلية عمل التطبيق من اللحظة التي يفتح فيها الراكب التطبيق وحتى وصوله لوجهته:
+      </p>
+
+      <!-- Flowchart Visual Container -->
+      <div class="p-6 rounded-3xl border-2 border-indigo-500/40 print:border-slate-400 bg-slate-950 print:bg-white shadow-2xl space-y-6">
+        
+        <!-- Layer 1 -->
+        <div>
+          <div class="text-[11px] font-black uppercase text-sky-400 print:text-black mb-2">1. طبقة الأجهزة والمستخدمين (Presentation & Client Layer)</div>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-center">
+            <div class="p-3 rounded-2xl bg-sky-950/40 print:bg-slate-100 border border-sky-800/60 print:border-slate-300">
+              <strong class="text-white print:text-black block mb-0.5">تطبيق الراكب (Passenger UI)</strong>
+              <span class="text-[10px] text-slate-400 print:text-slate-600">حجز المقاعد · تحديد أقرب محطة بالـ GPS · تتبع الحافلة</span>
+            </div>
+            <div class="p-3 rounded-2xl bg-amber-950/40 print:bg-slate-100 border border-amber-800/60 print:border-slate-300">
+              <strong class="text-white print:text-black block mb-0.5">تطبيق السائق (Driver UI)</strong>
+              <span class="text-[10px] text-slate-400 print:text-slate-600">بث الموقع الحي للحافلة · إدارة الركاب وصعودهم</span>
+            </div>
+            <div class="p-3 rounded-2xl bg-rose-950/40 print:bg-slate-100 border border-rose-800/60 print:border-slate-300">
+              <strong class="text-white print:text-black block mb-0.5">لوحة الإدارة (Admin UI)</strong>
+              <span class="text-[10px] text-slate-400 print:text-slate-600">اعتماد السائقين · التسعيرة والمسارات · الرد على التذاكر</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-center font-bold text-slate-500 text-xs">▼ بروتوكولات التزامن اللحظي JSON Over REST API ▼</div>
+
+        <!-- Layer 2 -->
+        <div>
+          <div class="text-[11px] font-black uppercase text-emerald-400 print:text-black mb-2">2. طبقة الخوارزميات والمعالجة الذكية (Processing Engine Layer)</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div class="p-3.5 rounded-2xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-300">
+              <div class="font-bold text-emerald-300 print:text-black mb-1">خوارزمية حساب المسافة (Haversine Distance Formula)</div>
+              <p class="text-[11px] text-slate-400 print:text-slate-600 leading-relaxed">
+                حساب المسافة الجغرافية الدقيقة بين إحداثيات الراكب ومحطات الأحساء لاكتشاف أقرب محطة سيراً ووقت الوصول بالدقائق.
+              </p>
+            </div>
+            <div class="p-3.5 rounded-2xl bg-slate-900 print:bg-slate-50 border border-slate-800 print:border-slate-300">
+              <div class="font-bold text-emerald-300 print:text-black mb-1">محرك التتبع والمحاكاة اللحظية (Bus Movement Engine)</div>
+              <p class="text-[11px] text-slate-400 print:text-slate-600 leading-relaxed">
+                تحريك الحافلات بسلاسة كل ثانيتين على طول مسار الرحلة، وتحديث إحداثيات الرادار وحساب المسافة وسرعة الحافلة (~42 كم/س).
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-center font-bold text-slate-500 text-xs">▼ مزامنة السجلات وقاعدة البيانات المشتركة ▼</div>
+
+        <!-- Layer 3 -->
+        <div>
+          <div class="text-[11px] font-black uppercase text-purple-400 print:text-black mb-2">3. طبقة الخادم وقاعدة البيانات (Server & Database Layer)</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div class="p-3.5 rounded-2xl bg-purple-950/30 print:bg-slate-100 border border-purple-800/60 print:border-slate-300">
+              <div class="font-bold text-purple-300 print:text-black mb-1">خادم Express Node.js السحابي</div>
+              <div class="text-[11px] text-slate-400 print:text-slate-600">
+                مسار <code class="text-sky-300 font-mono">/api/transit/state</code> المسؤول عن مزامنة التذاكر والرحلات عبر الهواتف المختلفة فورياً.
+              </div>
+            </div>
+            <div class="p-3.5 rounded-2xl bg-purple-950/30 print:bg-slate-100 border border-purple-800/60 print:border-slate-300">
+              <div class="font-bold text-purple-300 print:text-black mb-1">تخزين الحالات وقاعدة البيانات</div>
+              <div class="text-[11px] text-slate-400 print:text-slate-600">
+                ملف <code class="text-sky-300 font-mono">transit-db.json</code> مع دعم التخزين المحلي في المتصفح لضمان العمل Offline.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Sequence Workflow -->
+      <div class="p-4 bg-slate-800/40 print:bg-slate-100 rounded-2xl text-xs space-y-2">
+        <div class="font-bold text-white print:text-black">آلية تسلسل العمليات خطوة بخطوة (Operational Sequence):</div>
+        <ol class="list-decimal list-inside space-y-1 text-slate-300 print:text-slate-700 leading-relaxed text-[11px]">
+          <li><strong>إطلاق الرحلة:</strong> يقوم السائق المعتمد باختيار مسار الحافلة وبدء الرحلة لبث إحداثياتها كل ثانيتين.</li>
+          <li><strong>تحديد الموقع:</strong> يفتح الراكب التطبيق ويكتشف نظامه أقرب محطة له بالأحساء عبر Geolocation API ومسافة السير.</li>
+          <li><strong>حجز المقعد:</strong> يختار الراكب وجهته ويحجز مقعده برقم مقعد مخصص فوراً دون انتظار.</li>
+          <li><strong>التتبع الراداري:</strong> يضغط الراكب على "تتبع الباص" فيشاهد حركة الحافلة المباشرة وسرعتها وتوقيت وصولها.</li>
+          <li><strong>الصعود والإتمام:</strong> عند وصول الحافلة للمحطة، يؤكد السائق صعود الراكب (Boarded) لإتمام الرحلة.</li>
+        </ol>
+      </div>
+    </section>
+
+    <!-- SECTION 5: TECH STACK & EVALUATION -->
+    <section class="space-y-4">
+      <div class="flex items-center gap-2 text-sky-400 print:text-sky-800 font-black text-lg border-b border-slate-800 print:border-slate-200 pb-2">
+        <span>💻</span>
+        <h2>الفصل الخامس: المواصفات الفنية ومعايير التقييم الأكاديمي</h2>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+        <div class="p-3.5 rounded-2xl bg-slate-800/50 print:bg-slate-100 border border-slate-700/60 print:border-slate-300">
+          <div class="font-bold text-sky-400 print:text-black mb-1">الواجهة الأمامية</div>
+          <div class="text-[11px] text-slate-300 print:text-slate-700">React 18 · TypeScript · Tailwind CSS · Lucide Icons · RTL Native</div>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-800/50 print:bg-slate-100 border border-slate-700/60 print:border-slate-300">
+          <div class="font-bold text-emerald-400 print:text-black mb-1">الخادم الخلفي</div>
+          <div class="text-[11px] text-slate-300 print:text-slate-700">Node.js · Express Engine · Multi-device Sync API · TSX Runner</div>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-800/50 print:bg-slate-100 border border-slate-700/60 print:border-slate-300">
+          <div class="font-bold text-amber-400 print:text-black mb-1">الخرائط والرادار</div>
+          <div class="text-[11px] text-slate-300 print:text-slate-700">Browser Geolocation · Haversine Formula · SVG Vectors · ETA Calc</div>
+        </div>
+        <div class="p-3.5 rounded-2xl bg-slate-800/50 print:bg-slate-100 border border-slate-700/60 print:border-slate-300">
+          <div class="font-bold text-rose-400 print:text-black mb-1">المعايير والنشر</div>
+          <div class="text-[11px] text-slate-300 print:text-slate-700">PWA Offline Caching · Service Worker · Role Access · SEO Ready</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Academic Approval & Signatures Block -->
+    <footer class="pt-8 border-t-2 border-slate-800 print:border-slate-300 text-xs">
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-6 text-center text-slate-400 print:text-slate-600">
+        <div>
+          <div class="font-bold text-white print:text-black text-sm mb-4">طالب مشروع التخرج</div>
+          <div class="border-b border-dashed border-slate-700 print:border-slate-300 pb-2 mb-1">
+            التوقيع: .......................................
+          </div>
+          <div class="text-[10px]">الاسم والتاريخ</div>
+        </div>
+
+        <div>
+          <div class="font-bold text-white print:text-black text-sm mb-4">الأستاذ المشرف الأكاديمي</div>
+          <div class="border-b border-dashed border-slate-700 print:border-slate-300 pb-2 mb-1">
+            التوقيع: .......................................
+          </div>
+          <div class="text-[10px]">الاعتماد والدرجة</div>
+        </div>
+
+        <div class="col-span-2 sm:col-span-1">
+          <div class="font-bold text-white print:text-black text-sm mb-4">لجنة تقييم المشاريع</div>
+          <div class="border-b border-dashed border-slate-700 print:border-slate-300 pb-2 mb-1">
+            الختم: .......................................
+          </div>
+          <div class="text-[10px]">الكلية التقنية بالأحساء</div>
+        </div>
+      </div>
+    </footer>
+
+  </main>
+</body>
+</html>

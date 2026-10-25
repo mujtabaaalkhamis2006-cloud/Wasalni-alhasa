@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://alahsabus.sa/sitemap.xml
+Sitemap: https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app/sitemap.xml

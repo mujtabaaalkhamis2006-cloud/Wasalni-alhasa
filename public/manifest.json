@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "حافلات الأحساء - شبكة النقل العام",
+  "short_name": "باصات الأحساء",
+  "description": "منصة النقل العام وحجز حافلات الأحساء للركاب والسائقين والإدارة مع تتبع حي ومسارات تفاعلية",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f172a",
+  "theme_color": "#0284c7",
+  "icons": [
+    {
+      "src": "/bus-icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/bus-icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
