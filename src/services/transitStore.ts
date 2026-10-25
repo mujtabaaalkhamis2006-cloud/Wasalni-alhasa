@@ -19,9 +19,12 @@ import {
   INITIAL_SUPPORT_TICKETS,
   INITIAL_ANNOUNCEMENT
 } from '../data/mockData';
+import { getSupabase, getSupabaseConfig } from './supabaseClient';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 // Hardcoded Shared Cloud Run Backend URL for Universal Multi-Device & Vercel Sync
 export const CLOUD_RUN_BACKEND_URL = 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
+
 
 const STORAGE_KEY = 'al_ahsa_transit_real_v5';
 const AUTH_KEY = 'al_ahsa_transit_auth_v5';
@@ -50,9 +53,20 @@ class TransitStore {
   private deviceType: 'mobile' | 'tablet' | 'desktop' = 'mobile';
   private deviceName: string = 'هاتف ذكي';
   private sseEventSource: EventSource | null = null;
+  private supabaseChannel: RealtimeChannel | null = null;
+  private isSupabaseConnected = false;
 
   public getApiBaseUrl(): string {
     return CLOUD_RUN_BACKEND_URL;
+  }
+
+  public getSupabaseStatus(): { isConfigured: boolean; isConnected: boolean; url: string } {
+    const cfg = getSupabaseConfig();
+    return {
+      isConfigured: cfg.isConfigured,
+      isConnected: this.isSupabaseConnected,
+      url: cfg.url
+    };
   }
 
   constructor() {
@@ -63,6 +77,11 @@ class TransitStore {
 
     this.data = this.loadData();
     this.currentUser = this.loadAuth();
+    
+    // 1. Initialize Supabase Realtime & WebSockets (Vercel & Multi-device primary sync)
+    this.initRealtimeSupabase();
+
+    // 2. Fallbacks: Cloud Run / local server sync & SSE
     this.syncWithServer();
     this.sendPresenceHeartbeat();
     this.initRealtimeSse();
@@ -73,12 +92,17 @@ class TransitStore {
         this.sendPresenceHeartbeat();
       }, 5000);
 
-      // 4s polling fallback in case SSE reconnects or tab wakes up
+      // Periodic state sync
       setInterval(() => {
         this.syncWithServer();
-      }, 4000);
+      }, 6000);
 
       window.addEventListener('beforeunload', () => {
+        if (this.supabaseChannel && this.isSupabaseConnected) {
+          try {
+            this.supabaseChannel.untrack();
+          } catch {}
+        }
         try {
           navigator.sendBeacon(`${this.getApiBaseUrl()}/api/transit/presence/leave`, JSON.stringify({ sessionId: this.sessionId }));
         } catch {}
@@ -128,6 +152,208 @@ class TransitStore {
     } catch {
       return `ses-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     }
+  }
+
+  public async initRealtimeSupabase() {
+    if (typeof window === 'undefined') return;
+    const supabase = getSupabase();
+    if (!supabase) {
+      console.info('Supabase: Keys not detected or invalid, operating in local/fallback mode.');
+      return;
+    }
+
+    try {
+      if (this.supabaseChannel) {
+        try {
+          await supabase.removeChannel(this.supabaseChannel);
+        } catch {}
+        this.supabaseChannel = null;
+      }
+
+      const channel = supabase.channel('al-ahsa-transit-live', {
+        config: {
+          presence: { key: this.sessionId },
+          broadcast: { self: false }
+        }
+      });
+
+      // 1. Presence Sync & Tracking across all connected phones and desktops
+      channel.on('presence', { event: 'sync' }, () => {
+        try {
+          const state = channel.presenceState();
+          const list: ActivePresence[] = [];
+          Object.values(state).forEach((presences: any) => {
+            if (Array.isArray(presences)) {
+              presences.forEach((p: any) => {
+                if (p && p.sessionId) {
+                  list.push({
+                    sessionId: p.sessionId,
+                    userId: p.userId,
+                    userName: p.userName || 'مستخدم متصل',
+                    role: p.role || 'visitor',
+                    deviceType: p.deviceType || 'mobile',
+                    deviceName: p.deviceName || 'جهاز متصل',
+                    activeTripId: p.activeTripId,
+                    coords: p.coords,
+                    statusText: p.statusText,
+                    isOnline: true,
+                    lastSeen: p.lastSeen || new Date().toISOString()
+                  });
+                }
+              });
+            }
+          });
+          if (list.length > 0) {
+            this.activePresence = list;
+            this.notify();
+          }
+        } catch (e) {
+          console.warn('Supabase presence sync error:', e);
+        }
+      });
+
+      // 2. Realtime Broadcast: State Update
+      channel.on('broadcast', { event: 'state_update' }, ({ payload }: { payload: any }) => {
+        if (payload?.state) {
+          const changed = this.mergeRemoteState(payload.state);
+          if (changed) this.notify();
+        }
+      });
+
+      // 3. Realtime Broadcast: State Sync Request (when another device joins)
+      channel.on('broadcast', { event: 'request_state_sync' }, ({ payload }: { payload: any }) => {
+        if (payload?.requesterSessionId && payload.requesterSessionId !== this.sessionId) {
+          this.broadcastStateToSupabase(this.data);
+        }
+      });
+
+      // 4. Realtime Broadcast: Driver GPS Telemetry Stream
+      channel.on('broadcast', { event: 'driver_gps' }, ({ payload }: { payload: any }) => {
+        if (payload?.tripId && payload?.currentLocation) {
+          const trip = this.data.trips.find(t => t.id === payload.tripId);
+          if (trip) {
+            trip.currentLocation = payload.currentLocation;
+            if (trip.status !== 'in_progress') trip.status = 'in_progress';
+            this.notify();
+          }
+        }
+      });
+
+      // 5. Realtime Broadcast: User Deleted (Tombstone enforcement)
+      channel.on('broadcast', { event: 'user_deleted' }, ({ payload }: { payload: any }) => {
+        if (payload?.userId) {
+          this.handleRemoteUserDeleted(payload.userId, payload.deletedTripIds);
+        }
+      });
+
+      // 6. Realtime Broadcast: Trip Deleted (Tombstone enforcement)
+      channel.on('broadcast', { event: 'trip_deleted' }, ({ payload }: { payload: any }) => {
+        if (payload?.tripId) {
+          this.handleRemoteTripDeleted(payload.tripId);
+        }
+      });
+
+      // 7. Realtime Broadcast: User Registered
+      channel.on('broadcast', { event: 'user_registered' }, ({ payload }: { payload: any }) => {
+        if (payload?.user) {
+          this.handleRemoteUserRegistered(payload.user, payload.password);
+        }
+      });
+
+      // Subscribe to Supabase Realtime Channel
+      channel.subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          this.isSupabaseConnected = true;
+          this.supabaseChannel = channel;
+          await this.trackSupabasePresence();
+          channel.send({
+            type: 'broadcast',
+            event: 'request_state_sync',
+            payload: { requesterSessionId: this.sessionId }
+          });
+          this.notify();
+        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          this.isSupabaseConnected = false;
+          this.notify();
+        }
+      });
+
+      this.loadStateFromSupabaseTable(supabase);
+    } catch (err) {
+      console.warn('Could not initialize Supabase Realtime channel:', err);
+    }
+  }
+
+  private async trackSupabasePresence(statusText?: string) {
+    if (!this.supabaseChannel || !this.isSupabaseConnected) return;
+    try {
+      const user = this.currentUser;
+      const activeTrip = user?.role === 'driver'
+        ? this.data.trips.find(t => t.driverId === user.id && t.status === 'in_progress')
+        : null;
+
+      await this.supabaseChannel.track({
+        sessionId: this.sessionId,
+        userId: user?.id,
+        userName: user?.name || 'زائر في الأحساء',
+        role: user?.role || 'visitor',
+        deviceType: this.deviceType,
+        deviceName: this.deviceName,
+        activeTripId: activeTrip?.id,
+        coords: activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined,
+        statusText: statusText || (activeTrip ? `يقود رحلة (${activeTrip.routeName}) 🚌` : user?.role === 'driver' ? 'كابتن متصل ومتاح 🟢' : user?.role === 'admin' ? 'إدارة العمليات 🛡️' : 'متصل بالمنصة 🟢'),
+        connectedAt: new Date().toISOString(),
+        lastSeen: new Date().toISOString()
+      });
+    } catch {}
+  }
+
+  private broadcastStateToSupabase(data: StoredData) {
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'state_update',
+          payload: { state: data }
+        });
+      } catch {}
+    }
+    const supabase = getSupabase();
+    if (supabase) {
+      Promise.resolve(
+        supabase
+          .from('transit_state')
+          .upsert({ id: 'global_state', data, updated_at: new Date().toISOString() })
+      ).catch(() => {});
+    }
+  }
+
+  private handleRemoteUserRegistered(user: User, pass?: string) {
+    if (!user || !user.id) return;
+    if (this.data.deletedUserIds?.includes(user.id)) return;
+    const existingIndex = this.data.users.findIndex(u => u.id === user.id);
+    if (existingIndex >= 0) {
+      this.data.users[existingIndex] = user;
+    } else {
+      this.data.users.push(user);
+    }
+    if (pass && user.email) {
+      this.data.passwords[user.email.toLowerCase()] = pass;
+    }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    } catch {}
+    this.notify();
+  }
+
+  private async loadStateFromSupabaseTable(supabase: any) {
+    try {
+      const { data, error } = await supabase.from('transit_state').select('data').eq('id', 'global_state').maybeSingle();
+      if (!error && data?.data) {
+        const changed = this.mergeRemoteState(data.data);
+        if (changed) this.notify();
+      }
+    } catch {}
   }
 
   private initRealtimeSse() {
@@ -249,6 +475,10 @@ class TransitStore {
 
   public async sendPresenceHeartbeat(statusText?: string) {
     if (typeof window === 'undefined') return;
+    // 1. Supabase Realtime presence broadcast
+    await this.trackSupabasePresence(statusText);
+
+    // 2. HTTP Server heartbeat fallback
     try {
       const user = this.currentUser;
       const activeTrip = user?.role === 'driver'
@@ -272,7 +502,7 @@ class TransitStore {
       });
       if (res.ok) {
         const json = await res.json();
-        if (json.activePresence && Array.isArray(json.activePresence)) {
+        if (json.activePresence && Array.isArray(json.activePresence) && (!this.supabaseChannel || !this.isSupabaseConnected)) {
           this.activePresence = json.activePresence;
           this.notify();
         }
@@ -284,6 +514,19 @@ class TransitStore {
 
   public async pushRegistration(user: User, pass?: string) {
     if (typeof window === 'undefined') return;
+    // 1. Immediate broadcast to all connected devices via Supabase Realtime
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'user_registered',
+          payload: { user, password: pass }
+        });
+        this.broadcastStateToSupabase(this.data);
+      } catch {}
+    }
+
+    // 2. HTTP Server registration fallback
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/register`, {
         method: 'POST',
@@ -332,13 +575,25 @@ class TransitStore {
       this.notify();
     }
 
-    // Throttle network broadcast to at most once per 2 seconds to keep mobile responsive
+    // 2. Broadcast via Supabase Realtime WebSockets to all connected phones and passenger maps
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'driver_gps',
+          payload: { tripId, currentLocation: newLocation }
+        });
+      } catch {}
+    }
+    this.trackSupabasePresence();
+
+    // Throttle network HTTP broadcast to at most once per 2 seconds to keep mobile responsive
     if (now - this.lastBroadcastStamp < 2000) {
       return;
     }
     this.lastBroadcastStamp = now;
 
-    // 2. Transmit to server so other devices (passengers & admin) see it in real-time
+    // 3. Transmit to HTTP server fallback
     if (typeof window !== 'undefined') {
       try {
         await fetch(`${this.getApiBaseUrl()}/api/transit/driver-gps`, {
@@ -671,6 +926,7 @@ class TransitStore {
       console.warn('Failed to save to localStorage');
     }
     this.notify();
+    this.broadcastStateToSupabase(data);
     this.pushToServer(data);
   }
 
@@ -1500,6 +1756,16 @@ class TransitStore {
     this.data.trips = this.data.trips.filter(t => t.id !== tripId);
     this.saveData(this.data);
 
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'trip_deleted',
+          payload: { tripId }
+        });
+      } catch {}
+    }
+
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-trip`, {
         method: 'POST',
@@ -1627,6 +1893,16 @@ class TransitStore {
     this.data.users = this.data.users.filter(u => u.id !== driverId);
     this.saveData(this.data);
 
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'user_deleted',
+          payload: { userId: driverId, deletedTripIds: cancelledTripIds }
+        });
+      } catch {}
+    }
+
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {
         method: 'POST',
@@ -1660,6 +1936,16 @@ class TransitStore {
     // Remove user
     this.data.users = this.data.users.filter(u => u.id !== passengerId);
     this.saveData(this.data);
+
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'user_deleted',
+          payload: { userId: passengerId }
+        });
+      } catch {}
+    }
 
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {

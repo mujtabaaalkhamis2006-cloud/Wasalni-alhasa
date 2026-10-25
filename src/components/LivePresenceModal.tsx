@@ -66,19 +66,41 @@ export const LivePresenceModal: React.FC<LivePresenceModalProps> = ({
           </div>
         </div>
 
+        {/* Supabase Status Banner */}
+        {(() => {
+          const sbStatus = transitStore.getSupabaseStatus();
+          return (
+            <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-sky-950/30 to-slate-900 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${sbStatus.isConnected ? 'bg-emerald-400 animate-ping' : sbStatus.isConfigured ? 'bg-amber-400 animate-pulse' : 'bg-sky-400'}`} />
+                <span className="font-bold text-white">
+                  {sbStatus.isConnected
+                    ? 'شبكة المزامنة الفورية نشطة: Supabase Realtime (WebSockets) ⚡'
+                    : sbStatus.isConfigured
+                    ? 'جاري الربط مع قنوات Supabase Realtime... 🔄'
+                    : 'نظام المزامنة: يقرأ تلقائياً SUPABASE_URL و SUPABASE_ANON_KEY من Vercel 🚀'}
+                </span>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                {sbStatus.isConfigured ? 'Supabase Connected 🟢' : 'Vercel Env Ready ⚡'}
+              </span>
+            </div>
+          );
+        })()}
+
         {/* Presence List */}
         <div className="space-y-2.5">
           <div className="text-xs font-bold text-slate-300 flex items-center justify-between">
             <span>قائمة الأجهزة النشطة حالياً ({presenceList.length}):</span>
             <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>مزامنة مباشرة (Sub-Second SSE)</span>
+              <span>Supabase WebSockets Realtime ⚡</span>
             </span>
           </div>
 
           {presenceList.length === 0 ? (
             <div className="p-8 text-center bg-slate-800/40 border border-slate-800 rounded-2xl text-xs text-slate-400">
-              جاري فحص وتحديث الأجهزة المتصلة...
+              جاري فحص وتحديث الأجهزة المتصلة عبر Supabase...
             </div>
           ) : (
             presenceList.map(item => {
