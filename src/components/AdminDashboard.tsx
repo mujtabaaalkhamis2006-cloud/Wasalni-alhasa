@@ -461,6 +461,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
             <span className="text-slate-500 hidden sm:inline">|</span>
             <span className="text-slate-400 hidden sm:inline">إدارة العمليات المركزية وشبكة الحافلات</span>
+            <span className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-950/70 border border-emerald-700/60 text-[10px] text-emerald-300 font-bold">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              مزامنة سحابية حية (Vercel & الأجهزة المتعددة)
+            </span>
           </div>
         </div>
 

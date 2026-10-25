@@ -22,6 +22,17 @@ const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 
+// Full CORS Support for Cross-Domain and Vercel Multi-Device Synchronization
+app.use((_req: Request, res: Response, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+  if (_req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
 // Direct View and Download routes for graduation project report
 app.get(['/graduation-report', '/graduation-report.html'], (_req: Request, res: Response) => {
   res.sendFile(path.resolve(__dirname, 'public', 'graduation-report.html'));
@@ -46,10 +57,19 @@ app.use((req, _res, next) => {
 });
 
 // Shared Multi-Device Transit Database for cross-device sync
-const DB_FILE = path.resolve(__dirname, 'transit-db.json');
+const DB_FILE = process.env.VERCEL
+  ? path.resolve('/tmp', 'transit-db.json')
+  : path.resolve(__dirname, 'transit-db.json');
 
 function getTransitData() {
   try {
+    const rootDbFile = path.resolve(__dirname, 'transit-db.json');
+    if (process.env.VERCEL && !fs.existsSync(DB_FILE) && fs.existsSync(rootDbFile)) {
+      try {
+        fs.copyFileSync(rootDbFile, DB_FILE);
+      } catch {}
+    }
+
     if (fs.existsSync(DB_FILE)) {
       const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
       if (!Array.isArray(data.deletedUserIds)) data.deletedUserIds = [];
@@ -179,6 +199,7 @@ app.get('/api/transit/events', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
   res.flushHeaders();
 
   sseClients.add(res);
@@ -1059,7 +1080,12 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
+
+export { app };
+export default app;

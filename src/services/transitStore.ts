@@ -48,6 +48,36 @@ class TransitStore {
   private deviceName: string = 'هاتف ذكي';
   private sseEventSource: EventSource | null = null;
 
+  public getApiBaseUrl(): string {
+    if (typeof window === 'undefined') return '';
+    try {
+      const custom = localStorage.getItem('al_ahsa_backend_url');
+      if (custom && custom.trim()) {
+        return custom.trim().replace(/\/$/, '');
+      }
+    } catch {}
+
+    try {
+      const envUrl = (import.meta as any)?.env?.VITE_BACKEND_URL;
+      if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
+        return envUrl.trim().replace(/\/$/, '');
+      }
+    } catch {}
+
+    const host = window.location.hostname;
+    // When running on Vercel or any other external hosting, connect to the primary Cloud Run backend server
+    if (
+      host.includes('vercel.app') ||
+      host.includes('netlify.app') ||
+      host.includes('pages.dev') ||
+      host.includes('github.io')
+    ) {
+      return 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
+    }
+
+    return '';
+  }
+
   constructor() {
     const dev = this.detectDevice();
     this.deviceType = dev.deviceType;
@@ -73,7 +103,7 @@ class TransitStore {
 
       window.addEventListener('beforeunload', () => {
         try {
-          navigator.sendBeacon('/api/transit/presence/leave', JSON.stringify({ sessionId: this.sessionId }));
+          navigator.sendBeacon(`${this.getApiBaseUrl()}/api/transit/presence/leave`, JSON.stringify({ sessionId: this.sessionId }));
         } catch {}
       });
     }
@@ -129,7 +159,7 @@ class TransitStore {
       if (this.sseEventSource) {
         this.sseEventSource.close();
       }
-      this.sseEventSource = new EventSource('/api/transit/events');
+      this.sseEventSource = new EventSource(`${this.getApiBaseUrl()}/api/transit/events`);
 
       this.sseEventSource.addEventListener('init', (e: MessageEvent) => {
         try {
@@ -248,7 +278,7 @@ class TransitStore {
         ? this.data.trips.find(t => t.driverId === user.id && t.status === 'in_progress')
         : null;
 
-      const res = await fetch('/api/transit/presence', {
+      const res = await fetch(`${this.getApiBaseUrl()}/api/transit/presence`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -278,7 +308,7 @@ class TransitStore {
   public async pushRegistration(user: User, pass?: string) {
     if (typeof window === 'undefined') return;
     try {
-      await fetch('/api/transit/register', {
+      await fetch(`${this.getApiBaseUrl()}/api/transit/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user, password: pass })
@@ -334,7 +364,7 @@ class TransitStore {
     // 2. Transmit to server so other devices (passengers & admin) see it in real-time
     if (typeof window !== 'undefined') {
       try {
-        await fetch('/api/transit/driver-gps', {
+        await fetch(`${this.getApiBaseUrl()}/api/transit/driver-gps`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -355,7 +385,7 @@ class TransitStore {
 
   public async purgeMockData(): Promise<void> {
     try {
-      await fetch('/api/transit/purge-mock-data', { method: 'POST' });
+      await fetch(`${this.getApiBaseUrl()}/api/transit/purge-mock-data`, { method: 'POST' });
     } catch {}
 
     const bannedUsers = ['usr-driver-1', 'usr-driver-2', 'usr-pass-1', 'usr-drv-test'];
@@ -381,7 +411,7 @@ class TransitStore {
   private async pushToServer(data: StoredData) {
     if (typeof window === 'undefined') return;
     try {
-      await fetch('/api/transit/state', {
+      await fetch(`${this.getApiBaseUrl()}/api/transit/state`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
@@ -528,7 +558,7 @@ class TransitStore {
     if (typeof window === 'undefined' || this.isSyncing) return;
     this.isSyncing = true;
     try {
-      const res = await fetch('/api/transit/state');
+      const res = await fetch(`${this.getApiBaseUrl()}/api/transit/state`);
       if (res.ok) {
         const json = await res.json();
         if (json.activePresence && Array.isArray(json.activePresence)) {
@@ -785,7 +815,7 @@ class TransitStore {
     // 1. Authoritative Server Verification (checks instant multi-device registration)
     if (typeof window !== 'undefined') {
       try {
-        const res = await fetch('/api/transit/login', {
+        const res = await fetch(`${this.getApiBaseUrl()}/api/transit/login`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1494,7 +1524,7 @@ class TransitStore {
     this.saveData(this.data);
 
     try {
-      await fetch('/api/transit/delete-trip', {
+      await fetch(`${this.getApiBaseUrl()}/api/transit/delete-trip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tripId })
@@ -1621,7 +1651,7 @@ class TransitStore {
     this.saveData(this.data);
 
     try {
-      await fetch('/api/transit/delete-user', {
+      await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: driverId })
@@ -1655,7 +1685,7 @@ class TransitStore {
     this.saveData(this.data);
 
     try {
-      await fetch('/api/transit/delete-user', {
+      await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: passengerId })
