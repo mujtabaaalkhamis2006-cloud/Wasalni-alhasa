@@ -37,6 +37,12 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+  // Never intercept or cache real-time API or SSE requests
+  if (url.pathname.includes('/api/')) {
+    return;
+  }
+
   // Navigation preload & cache-first or network-first strategy
   if (event.request.mode === 'navigate') {
     event.respondWith(

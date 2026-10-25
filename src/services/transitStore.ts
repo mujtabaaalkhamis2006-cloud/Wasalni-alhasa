@@ -20,6 +20,9 @@ import {
   INITIAL_ANNOUNCEMENT
 } from '../data/mockData';
 
+// Hardcoded Shared Cloud Run Backend URL for Universal Multi-Device & Vercel Sync
+export const CLOUD_RUN_BACKEND_URL = 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
+
 const STORAGE_KEY = 'al_ahsa_transit_real_v5';
 const AUTH_KEY = 'al_ahsa_transit_auth_v5';
 
@@ -49,33 +52,7 @@ class TransitStore {
   private sseEventSource: EventSource | null = null;
 
   public getApiBaseUrl(): string {
-    if (typeof window === 'undefined') return '';
-    try {
-      const custom = localStorage.getItem('al_ahsa_backend_url');
-      if (custom && custom.trim()) {
-        return custom.trim().replace(/\/$/, '');
-      }
-    } catch {}
-
-    try {
-      const envUrl = (import.meta as any)?.env?.VITE_BACKEND_URL;
-      if (envUrl && typeof envUrl === 'string' && envUrl.trim()) {
-        return envUrl.trim().replace(/\/$/, '');
-      }
-    } catch {}
-
-    const host = window.location.hostname;
-    // When running on Vercel or any other external hosting, connect to the primary Cloud Run backend server
-    if (
-      host.includes('vercel.app') ||
-      host.includes('netlify.app') ||
-      host.includes('pages.dev') ||
-      host.includes('github.io')
-    ) {
-      return 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
-    }
-
-    return '';
+    return CLOUD_RUN_BACKEND_URL;
   }
 
   constructor() {
