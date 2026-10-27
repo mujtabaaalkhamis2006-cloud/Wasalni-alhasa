@@ -69,12 +69,13 @@ export function getSupabase(): SupabaseClient | null {
   try {
     cachedClient = createClient(config.url, config.anonKey, {
       auth: {
-        persistSession: false,
-        autoRefreshToken: false
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true
       },
       realtime: {
         params: {
-          eventsPerSecond: 20
+          eventsPerSecond: 25
         }
       }
     });
@@ -93,9 +94,189 @@ export function setSupabaseConfigOverride(url: string, anonKey: string): boolean
     if (!url || !anonKey) {
       localStorage.removeItem(SUPABASE_LOCAL_STORAGE_KEY);
     } else {
-      localStorage.setItem(SUPABASE_LOCAL_STORAGE_KEY, JSON.stringify({ url: url.trim(), anonKey: anonKey.trim() }));
+      localStorage.setItem(
+        SUPABASE_LOCAL_STORAGE_KEY,
+        JSON.stringify({ url: url.trim(), anonKey: anonKey.trim() })
+      );
     }
     cachedClient = null;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------- Database Table Helper Operations ----------------
+
+/**
+ * Persists a user account into Supabase 'transit_users' table.
+ */
+export async function saveUserToSupabaseDb(user: any, password?: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase || !user || !user.id) return false;
+
+  try {
+    const row: Record<string, any> = {
+      id: user.id,
+      name: user.name,
+      phone: (user.phone || '').trim(),
+      email: (user.email || '').toLowerCase().trim(),
+      role: user.role,
+      status: user.status || 'active',
+      bus_details: user.busDetails || null,
+      updated_at: new Date().toISOString()
+    };
+
+    if (password) {
+      row.password = password.trim();
+    }
+    if (user.createdAt) {
+      row.created_at = user.createdAt;
+    }
+
+    const { error } = await supabase.from('transit_users').upsert(row);
+    if (error) {
+      console.warn('transit_users upsert warning (table may need creation):', error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Queries Supabase 'transit_users' table by email or phone for cross-device authentication.
+ */
+export async function findUserInSupabaseDb(identifier: string): Promise<any | null> {
+  const supabase = getSupabase();
+  if (!supabase || !identifier) return null;
+
+  const clean = identifier.trim().toLowerCase();
+
+  try {
+    // Try by email first
+    const { data: byEmail, error: errEmail } = await supabase
+      .from('transit_users')
+      .select('*')
+      .ilike('email', clean)
+      .maybeSingle();
+
+    if (!errEmail && byEmail) {
+      return byEmail;
+    }
+
+    // Try by phone
+    const { data: byPhone, error: errPhone } = await supabase
+      .from('transit_users')
+      .select('*')
+      .eq('phone', identifier.trim())
+      .maybeSingle();
+
+    if (!errPhone && byPhone) {
+      return byPhone;
+    }
+
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Loads all users from Supabase 'transit_users' table.
+ */
+export async function fetchAllUsersFromSupabaseDb(): Promise<any[]> {
+  const supabase = getSupabase();
+  if (!supabase) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('transit_users')
+      .select('*');
+
+    if (!error && Array.isArray(data)) {
+      return data;
+    }
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Persists the entire application state snapshot in Supabase 'transit_state' table.
+ */
+export async function saveStateToSupabaseDb(state: any): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase || !state) return false;
+
+  try {
+    const { error } = await supabase
+      .from('transit_state')
+      .upsert({
+        id: 'global_state',
+        data: state,
+        updated_at: new Date().toISOString()
+      });
+
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fetches the global state snapshot from Supabase 'transit_state' table.
+ */
+export async function fetchStateFromSupabaseDb(): Promise<any | null> {
+  const supabase = getSupabase();
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('transit_state')
+      .select('data')
+      .eq('id', 'global_state')
+      .maybeSingle();
+
+    if (!error && data?.data) {
+      return data.data;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Deletes a user from Supabase 'transit_users' table.
+ */
+export async function deleteUserFromSupabaseDb(userId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase || !userId) return false;
+
+  try {
+    const { error } = await supabase
+      .from('transit_users')
+      .delete()
+      .eq('id', userId);
+
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Deletes a trip from Supabase 'transit_trips' table if it exists.
+ */
+export async function deleteTripFromSupabaseDb(tripId: string): Promise<boolean> {
+  const supabase = getSupabase();
+  if (!supabase || !tripId) return false;
+
+  try {
+    await supabase.from('transit_trips').delete().eq('id', tripId);
     return true;
   } catch {
     return false;

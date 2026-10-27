@@ -19,15 +19,26 @@ import {
   INITIAL_SUPPORT_TICKETS,
   INITIAL_ANNOUNCEMENT
 } from '../data/mockData';
-import { getSupabase, getSupabaseConfig } from './supabaseClient';
+import {
+  getSupabase,
+  getSupabaseConfig,
+  saveUserToSupabaseDb,
+  findUserInSupabaseDb,
+  fetchAllUsersFromSupabaseDb,
+  saveStateToSupabaseDb,
+  fetchStateFromSupabaseDb,
+  deleteUserFromSupabaseDb,
+  deleteTripFromSupabaseDb
+} from './supabaseClient';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 // Hardcoded Shared Cloud Run Backend URL for Universal Multi-Device & Vercel Sync
 export const CLOUD_RUN_BACKEND_URL = 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
 
-
 const STORAGE_KEY = 'al_ahsa_transit_real_v5';
 const AUTH_KEY = 'al_ahsa_transit_auth_v5';
+const PERSISTENT_SESSION_KEY = 'al_ahsa_transit_persistent_session_v6';
+
 
 interface StoredData {
   users: User[];
@@ -170,6 +181,9 @@ class TransitStore {
         this.supabaseChannel = null;
       }
 
+      // Step 1: Immediately sync with Supabase Postgres DB tables
+      await this.syncWithSupabase();
+
       const channel = supabase.channel('al-ahsa-transit-live', {
         config: {
           presence: { key: this.sessionId },
@@ -212,7 +226,7 @@ class TransitStore {
         }
       });
 
-      // 2. Realtime Broadcast: State Update
+      // 2. Realtime Broadcast: State Update (live sync across all devices)
       channel.on('broadcast', { event: 'state_update' }, ({ payload }: { payload: any }) => {
         if (payload?.state) {
           const changed = this.mergeRemoteState(payload.state);
@@ -260,6 +274,45 @@ class TransitStore {
         }
       });
 
+      // 8. Postgres Database Realtime: Listen to direct table updates
+      channel
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'transit_state' },
+          (payload: any) => {
+            if (payload?.new && (payload.new as any).data) {
+              const changed = this.mergeRemoteState((payload.new as any).data);
+              if (changed) this.notify();
+            }
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'transit_users' },
+          (payload: any) => {
+            if (payload?.eventType === 'INSERT' || payload?.eventType === 'UPDATE') {
+              if (payload?.new) {
+                const dbU = payload.new;
+                const u: User = {
+                  id: dbU.id,
+                  name: dbU.name,
+                  phone: dbU.phone,
+                  email: dbU.email,
+                  role: dbU.role,
+                  status: dbU.status || 'active',
+                  busDetails: dbU.bus_details || undefined,
+                  createdAt: dbU.created_at || new Date().toISOString()
+                };
+                this.handleRemoteUserRegistered(u, dbU.password);
+              }
+            } else if (payload?.eventType === 'DELETE') {
+              if (payload?.old?.id) {
+                this.handleRemoteUserDeleted(payload.old.id);
+              }
+            }
+          }
+        );
+
       // Subscribe to Supabase Realtime Channel
       channel.subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -277,10 +330,76 @@ class TransitStore {
           this.notify();
         }
       });
-
-      this.loadStateFromSupabaseTable(supabase);
     } catch (err) {
       console.warn('Could not initialize Supabase Realtime channel:', err);
+    }
+  }
+
+  public async syncWithSupabase() {
+    try {
+      let hasChanges = false;
+
+      // 1. Fetch State Snapshot from 'transit_state' table
+      const stateSnapshot = await fetchStateFromSupabaseDb();
+      if (stateSnapshot && Array.isArray(stateSnapshot.users)) {
+        if (this.mergeRemoteState(stateSnapshot)) {
+          hasChanges = true;
+        }
+      }
+
+      // 2. Fetch Users from 'transit_users' table
+      const dbUsers = await fetchAllUsersFromSupabaseDb();
+      if (Array.isArray(dbUsers) && dbUsers.length > 0) {
+        dbUsers.forEach((dbU: any) => {
+          if (!this.data.deletedUserIds?.includes(dbU.id)) {
+            const mappedUser: User = {
+              id: dbU.id,
+              name: dbU.name,
+              phone: dbU.phone,
+              email: dbU.email,
+              role: dbU.role,
+              status: dbU.status || 'active',
+              busDetails: dbU.bus_details || undefined,
+              createdAt: dbU.created_at || new Date().toISOString()
+            };
+            const existing = this.data.users.find(u => u.id === mappedUser.id);
+            if (!existing) {
+              this.data.users.push(mappedUser);
+              hasChanges = true;
+            } else if (existing.status !== mappedUser.status || existing.name !== mappedUser.name) {
+              Object.assign(existing, mappedUser);
+              hasChanges = true;
+            }
+            if (dbU.password && mappedUser.email) {
+              this.data.passwords[mappedUser.email.toLowerCase()] = dbU.password;
+            }
+            if (dbU.password && mappedUser.phone) {
+              this.data.passwords[mappedUser.phone.trim()] = dbU.password;
+            }
+          }
+        });
+      }
+
+      // 3. Reconcile Current User Session Persistence
+      if (this.currentUser) {
+        const freshUser = this.data.users.find(u => u.id === this.currentUser?.id);
+        if (freshUser) {
+          if (freshUser.status !== this.currentUser.status || freshUser.name !== this.currentUser.name) {
+            this.currentUser = freshUser;
+            this.saveAuth(freshUser);
+            hasChanges = true;
+          }
+        }
+      }
+
+      if (hasChanges) {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+        } catch {}
+        this.notify();
+      }
+    } catch (e) {
+      console.warn('syncWithSupabase warning:', e);
     }
   }
 
@@ -318,14 +437,8 @@ class TransitStore {
         });
       } catch {}
     }
-    const supabase = getSupabase();
-    if (supabase) {
-      Promise.resolve(
-        supabase
-          .from('transit_state')
-          .upsert({ id: 'global_state', data, updated_at: new Date().toISOString() })
-      ).catch(() => {});
-    }
+    // Save to Supabase 'transit_state' database table
+    saveStateToSupabaseDb(data);
   }
 
   private handleRemoteUserRegistered(user: User, pass?: string) {
@@ -340,20 +453,13 @@ class TransitStore {
     if (pass && user.email) {
       this.data.passwords[user.email.toLowerCase()] = pass;
     }
+    if (pass && user.phone) {
+      this.data.passwords[user.phone.trim()] = pass;
+    }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
     } catch {}
     this.notify();
-  }
-
-  private async loadStateFromSupabaseTable(supabase: any) {
-    try {
-      const { data, error } = await supabase.from('transit_state').select('data').eq('id', 'global_state').maybeSingle();
-      if (!error && data?.data) {
-        const changed = this.mergeRemoteState(data.data);
-        if (changed) this.notify();
-      }
-    } catch {}
   }
 
   private initRealtimeSse() {
@@ -514,7 +620,11 @@ class TransitStore {
 
   public async pushRegistration(user: User, pass?: string) {
     if (typeof window === 'undefined') return;
-    // 1. Immediate broadcast to all connected devices via Supabase Realtime
+
+    // 1. Direct write into Supabase Database 'transit_users' table
+    await saveUserToSupabaseDb(user, pass);
+
+    // 2. Immediate broadcast to all connected devices via Supabase Realtime
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {
         this.supabaseChannel.send({
@@ -524,18 +634,8 @@ class TransitStore {
         });
         this.broadcastStateToSupabase(this.data);
       } catch {}
-    }
-
-    // 2. HTTP Server registration fallback
-    try {
-      await fetch(`${this.getApiBaseUrl()}/api/transit/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, password: pass })
-      });
-      await this.syncWithServer();
-    } catch (e) {
-      // offline fallback
+    } else {
+      this.broadcastStateToSupabase(this.data);
     }
   }
 
@@ -790,21 +890,28 @@ class TransitStore {
     if (typeof window === 'undefined' || this.isSyncing) return;
     this.isSyncing = true;
     try {
-      const res = await fetch(`${this.getApiBaseUrl()}/api/transit/state`);
-      if (res.ok) {
-        const json = await res.json();
-        if (json.activePresence && Array.isArray(json.activePresence)) {
-          this.activePresence = json.activePresence;
-        }
-        if (json.success && json.data && Array.isArray(json.data.users)) {
-          const changed = this.mergeRemoteState(json.data);
-          if (changed) {
-            this.notify();
+      // 1. Authoritative Supabase Database Sync
+      await this.syncWithSupabase();
+
+      // 2. Optional non-blocking HTTP server fallback
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const res = await fetch(`${this.getApiBaseUrl()}/api/transit/state`, { signal: controller.signal });
+        clearTimeout(timeout);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.activePresence && Array.isArray(json.activePresence) && (!this.supabaseChannel || !this.isSupabaseConnected)) {
+            this.activePresence = json.activePresence;
+          }
+          if (json.success && json.data && Array.isArray(json.data.users)) {
+            const changed = this.mergeRemoteState(json.data);
+            if (changed) {
+              this.notify();
+            }
           }
         }
-      }
-    } catch (e) {
-      // ignore network errors
+      } catch {}
     } finally {
       this.isSyncing = false;
     }
@@ -931,22 +1038,30 @@ class TransitStore {
   }
 
   private loadAuth(): User | null {
+    if (typeof window === 'undefined') return null;
     try {
-      const savedAuth = localStorage.getItem(AUTH_KEY);
-      if (savedAuth) {
-        const parsed = JSON.parse(savedAuth);
-        if (parsed.name && parsed.name.includes('سلمان')) {
-          parsed.name = 'مسؤول إدارة العمليات';
-        }
-        // Ensure user still exists in DB
-        const existing = this.data.users.find(u => u.id === parsed.id);
-        if (existing) {
-          if (existing.name && existing.name.includes('سلمان')) {
-            existing.name = 'مسؤول إدارة العمليات';
+      // 1. Check persistent long-term session storage
+      let raw = localStorage.getItem(PERSISTENT_SESSION_KEY);
+      if (!raw) {
+        raw = localStorage.getItem(AUTH_KEY);
+      }
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const userObj: User = parsed.user || parsed;
+        if (userObj && userObj.id) {
+          if (userObj.name && userObj.name.includes('سلمان')) {
+            userObj.name = 'مسؤول إدارة العمليات';
           }
-          return existing;
+          // Do not log out if not tombstoned
+          const isTombstoned = (this.data.deletedUserIds || []).includes(userObj.id);
+          if (!isTombstoned) {
+            const existing = this.data.users.find(u => u.id === userObj.id);
+            if (!existing) {
+              this.data.users.push(userObj);
+            }
+            return existing || userObj;
+          }
         }
-        return parsed;
       }
     } catch (e) {
       // ignore
@@ -956,10 +1071,20 @@ class TransitStore {
 
   private saveAuth(user: User | null) {
     this.currentUser = user;
-    if (user) {
-      localStorage.setItem(AUTH_KEY, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(AUTH_KEY);
+    if (typeof window !== 'undefined') {
+      if (user) {
+        const persistentPayload = {
+          user,
+          sessionId: this.sessionId,
+          loggedInAt: new Date().toISOString(),
+          persistent: true
+        };
+        localStorage.setItem(PERSISTENT_SESSION_KEY, JSON.stringify(persistentPayload));
+        localStorage.setItem(AUTH_KEY, JSON.stringify(user));
+      } else {
+        localStorage.removeItem(PERSISTENT_SESSION_KEY);
+        localStorage.removeItem(AUTH_KEY);
+      }
     }
     this.notify();
     this.sendPresenceHeartbeat(user ? `متصل الآن كـ ${user.role === 'driver' ? 'سائق حافلة 🚌' : user.role === 'admin' ? 'إدارة 🛡️' : 'راكب 👤'}` : 'زائر');
@@ -1045,46 +1170,58 @@ class TransitStore {
     const cleanId = identifier.trim().toLowerCase();
     const cleanPass = pass.trim();
 
-    // 1. Authoritative Server Verification (checks instant multi-device registration)
-    if (typeof window !== 'undefined') {
+    // 1. Authoritative Supabase Database Verification (Instant Cross-Device Authentication)
+    const supabase = getSupabase();
+    if (supabase) {
       try {
-        const res = await fetch(`${this.getApiBaseUrl()}/api/transit/login`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            identifier: cleanId,
-            password: cleanPass,
-            role: targetRole,
-            sessionId: this.sessionId,
-            deviceType: this.deviceType,
-            deviceName: this.deviceName
-          })
-        });
-        const json = await res.json();
-        if (res.ok && json.success && json.user) {
-          const user: User = json.user;
-          // Store user locally
-          const exists = this.data.users.find(u => u.id === user.id);
-          if (!exists) {
-            this.data.users.push(user);
-          } else {
-            Object.assign(exists, user);
+        // Step A: Check 'transit_users' table
+        const dbUser = await findUserInSupabaseDb(identifier);
+        if (dbUser) {
+          // Role check
+          if (targetRole && dbUser.role !== targetRole) {
+            const roleName = targetRole === 'admin' ? 'إدارة' : targetRole === 'driver' ? 'سائق' : 'راكب';
+            return { success: false, error: `هذا الحساب مسجل كـ (${dbUser.role}) وليس (${roleName})` };
           }
-          if (user.email) this.data.passwords[user.email.toLowerCase()] = cleanPass;
-          if (user.phone) this.data.passwords[user.phone.trim()] = cleanPass;
-          this.saveData(this.data);
-          this.saveAuth(user);
-          return { success: true, user };
-        } else if (json.error) {
-          return { success: false, error: json.error };
+
+          // Password verification
+          const expectedPass = (dbUser.password || '').trim() || (dbUser.id === 'usr-admin' ? 'admin123' : '123456');
+          if (expectedPass === cleanPass) {
+            const mappedUser: User = {
+              id: dbUser.id,
+              name: dbUser.name,
+              phone: dbUser.phone,
+              email: dbUser.email,
+              role: dbUser.role,
+              status: dbUser.status || 'active',
+              busDetails: dbUser.bus_details || undefined,
+              createdAt: dbUser.created_at || new Date().toISOString()
+            };
+
+            // Pending driver check
+            if (mappedUser.role === 'driver' && mappedUser.status === 'pending') {
+              return {
+                success: false,
+                error: 'حسابك كسائق ما زال قيد المراجعة والتدقيق من قبل الإدارة. سيتم تفعيله قريباً.'
+              };
+            }
+
+            this.handleRemoteUserRegistered(mappedUser, cleanPass);
+            this.saveAuth(mappedUser);
+            return { success: true, user: mappedUser };
+          }
+        }
+
+        // Step B: Fetch latest snapshot from 'transit_state' table in Supabase
+        const stateSnapshot = await fetchStateFromSupabaseDb();
+        if (stateSnapshot && Array.isArray(stateSnapshot.users)) {
+          this.mergeRemoteState(stateSnapshot);
         }
       } catch (err) {
-        // Fallback to local
+        console.warn('Supabase DB login lookup warning:', err);
       }
     }
 
-    // 2. Fallback to local store after quick sync
-    await this.syncWithServer();
+    // 2. Local memory / offline fallback
     return this.login(identifier, pass, targetRole);
   }
 
@@ -1766,6 +1903,8 @@ class TransitStore {
       } catch {}
     }
 
+    await deleteTripFromSupabaseDb(tripId);
+
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-trip`, {
         method: 'POST',
@@ -1903,6 +2042,8 @@ class TransitStore {
       } catch {}
     }
 
+    await deleteUserFromSupabaseDb(driverId);
+
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {
         method: 'POST',
@@ -1946,6 +2087,8 @@ class TransitStore {
         });
       } catch {}
     }
+
+    await deleteUserFromSupabaseDb(passengerId);
 
     try {
       await fetch(`${this.getApiBaseUrl()}/api/transit/delete-user`, {
