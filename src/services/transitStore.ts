@@ -31,6 +31,7 @@ import {
   deleteTripFromSupabaseDb
 } from './supabaseClient';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+import mqtt, { type MqttClient } from 'mqtt';
 
 // Hardcoded Shared Cloud Run Backend URL for Universal Multi-Device & Vercel Sync
 export const CLOUD_RUN_BACKEND_URL = 'https://ais-pre-zmeqp3d7vghpy42smpj5r2-949617401674.europe-west2.run.app';
@@ -66,6 +67,8 @@ class TransitStore {
   private sseEventSource: EventSource | null = null;
   private supabaseChannel: RealtimeChannel | null = null;
   private isSupabaseConnected = false;
+  private mqttClient: MqttClient | null = null;
+  private isMqttConnected = false;
 
   public getApiBaseUrl(): string {
     return CLOUD_RUN_BACKEND_URL;
@@ -80,6 +83,12 @@ class TransitStore {
     };
   }
 
+  public getMqttStatus(): { isConnected: boolean } {
+    return {
+      isConnected: this.isMqttConnected
+    };
+  }
+
   constructor() {
     const dev = this.detectDevice();
     this.deviceType = dev.deviceType;
@@ -89,10 +98,13 @@ class TransitStore {
     this.data = this.loadData();
     this.currentUser = this.loadAuth();
     
-    // 1. Initialize Supabase Realtime & WebSockets (Vercel & Multi-device primary sync)
+    // 1. Initialize High-Availability Universal MQTT Realtime (Dual-Carrier Cross-Device Sync)
+    this.initMqttRealtime();
+
+    // 2. Initialize Supabase Realtime & WebSockets (Vercel & Multi-device primary sync)
     this.initRealtimeSupabase();
 
-    // 2. Fallbacks: Cloud Run / local server sync & SSE
+    // 3. Fallbacks: Cloud Run / local server sync & SSE
     this.syncWithServer();
     this.sendPresenceHeartbeat();
     this.initRealtimeSse();
@@ -109,6 +121,11 @@ class TransitStore {
       }, 6000);
 
       window.addEventListener('beforeunload', () => {
+        if (this.mqttClient) {
+          try {
+            this.mqttClient.end();
+          } catch {}
+        }
         if (this.supabaseChannel && this.isSupabaseConnected) {
           try {
             this.supabaseChannel.untrack();
@@ -163,6 +180,192 @@ class TransitStore {
     } catch {
       return `ses-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     }
+  }
+
+  // --- Universal Cross-Device Realtime Engine via Secure WebSockets MQTT ---
+  public initMqttRealtime() {
+    if (typeof window === 'undefined') return;
+    try {
+      if (this.mqttClient) {
+        try {
+          this.mqttClient.end(true);
+        } catch {}
+        this.mqttClient = null;
+      }
+
+      // High-availability TLS broker with global low-latency CDN edge nodes
+      const brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
+      const client = mqtt.connect(brokerUrl, {
+        clientId: `client_ahsa_${this.sessionId}_${Math.random().toString(36).substring(2, 7)}`,
+        clean: true,
+        connectTimeout: 8000,
+        reconnectPeriod: 2000,
+        keepalive: 45
+      });
+
+      this.mqttClient = client;
+
+      client.on('connect', () => {
+        this.isMqttConnected = true;
+        this.notify();
+        // Subscribe to all Al Ahsa transit topics
+        client.subscribe('al-ahsa-transit/v5/#', { qos: 1 });
+        // Announce presence immediately
+        this.broadcastMqttPresence();
+        // Request state sync from any other connected devices
+        this.publishMqtt('al-ahsa-transit/v5/sync-request', { requesterSessionId: this.sessionId });
+      });
+
+      client.on('message', (topic: string, message: any) => {
+        try {
+          const payload = JSON.parse(message.toString());
+          if (!payload) return;
+
+          // 1. Live User Registered (Driver, Passenger, Admin from another device)
+          if (topic === 'al-ahsa-transit/v5/user-registered') {
+            if (payload.user && payload.senderSessionId !== this.sessionId) {
+              this.handleRemoteUserRegistered(payload.user, payload.password);
+            }
+          }
+
+          // 2. Full State Update
+          else if (topic === 'al-ahsa-transit/v5/state') {
+            if (payload.state && payload.senderSessionId !== this.sessionId) {
+              const changed = this.mergeRemoteState(payload.state);
+              if (changed) this.notify();
+            }
+          }
+
+          // 3. Live Presence Heartbeat
+          else if (topic === 'al-ahsa-transit/v5/presence') {
+            if (payload.sessionId && payload.sessionId !== this.sessionId) {
+              this.handleRemotePresence(payload);
+            }
+          }
+
+          // 4. Live GPS Telemetry from Driver
+          else if (topic === 'al-ahsa-transit/v5/gps') {
+            if (payload.tripId && payload.currentLocation && payload.senderSessionId !== this.sessionId) {
+              const trip = this.data.trips.find(t => t.id === payload.tripId);
+              if (trip) {
+                trip.currentLocation = payload.currentLocation;
+                if (trip.status !== 'in_progress') trip.status = 'in_progress';
+                this.notify();
+              }
+            }
+          }
+
+          // 5. User Deleted (Tombstone enforcement across all devices)
+          else if (topic === 'al-ahsa-transit/v5/user-deleted') {
+            if (payload.userId && payload.senderSessionId !== this.sessionId) {
+              this.handleRemoteUserDeleted(payload.userId, payload.deletedTripIds);
+            }
+          }
+
+          // 6. Trip Deleted (Tombstone enforcement across all devices)
+          else if (topic === 'al-ahsa-transit/v5/trip-deleted') {
+            if (payload.tripId && payload.senderSessionId !== this.sessionId) {
+              this.handleRemoteTripDeleted(payload.tripId);
+            }
+          }
+
+          // 7. Sync Request from newly connected device
+          else if (topic === 'al-ahsa-transit/v5/sync-request') {
+            if (payload.requesterSessionId && payload.requesterSessionId !== this.sessionId) {
+              this.publishMqtt('al-ahsa-transit/v5/state', {
+                state: this.data,
+                senderSessionId: this.sessionId,
+                timestamp: Date.now()
+              }, { qos: 1, retain: true });
+            }
+          }
+        } catch (e) {
+          console.warn('MQTT message parse error:', e);
+        }
+      });
+
+      client.on('error', (err) => {
+        console.warn('MQTT client error:', err);
+      });
+
+      client.on('offline', () => {
+        this.isMqttConnected = false;
+        this.notify();
+      });
+
+      client.on('close', () => {
+        this.isMqttConnected = false;
+        this.notify();
+      });
+    } catch (e) {
+      console.warn('Failed to setup MQTT realtime:', e);
+    }
+  }
+
+  public publishMqtt(topic: string, data: any, options: { retain?: boolean; qos?: 0 | 1 | 2 } = { qos: 1 }) {
+    if (this.mqttClient && this.isMqttConnected) {
+      try {
+        const payloadStr = JSON.stringify(data);
+        this.mqttClient.publish(topic, payloadStr, options);
+      } catch (err) {
+        console.warn('MQTT publish error:', err);
+      }
+    }
+  }
+
+  private broadcastMqttPresence(statusText?: string) {
+    const user = this.currentUser;
+    const activeTrip = user?.role === 'driver'
+      ? this.data.trips.find(t => t.driverId === user.id && t.status === 'in_progress')
+      : null;
+
+    this.publishMqtt('al-ahsa-transit/v5/presence', {
+      sessionId: this.sessionId,
+      userId: user?.id,
+      userName: user?.name || 'زائر في الأحساء',
+      role: user?.role || 'visitor',
+      deviceType: this.deviceType,
+      deviceName: this.deviceName,
+      activeTripId: activeTrip?.id,
+      coords: activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined,
+      statusText: statusText || (activeTrip ? `يقود رحلة (${activeTrip.routeName}) 🚌` : user?.role === 'driver' ? 'كابتن متصل ومتاح 🟢' : user?.role === 'admin' ? 'إدارة العمليات 🛡️' : 'متصل بالمنصة 🟢'),
+      isOnline: true,
+      lastSeen: new Date().toISOString()
+    }, { qos: 0 });
+  }
+
+  private handleRemotePresence(p: any) {
+    if (!p || !p.sessionId) return;
+    const now = Date.now();
+    const existingIndex = this.activePresence.findIndex(x => x.sessionId === p.sessionId);
+    const presenceItem: ActivePresence = {
+      sessionId: p.sessionId,
+      userId: p.userId,
+      userName: p.userName || 'مستخدم متصل',
+      role: p.role || 'visitor',
+      deviceType: p.deviceType || 'mobile',
+      deviceName: p.deviceName || 'جهاز متصل',
+      activeTripId: p.activeTripId,
+      coords: p.coords,
+      statusText: p.statusText,
+      isOnline: true,
+      lastSeen: new Date().toISOString()
+    };
+
+    if (existingIndex >= 0) {
+      this.activePresence[existingIndex] = presenceItem;
+    } else {
+      this.activePresence.push(presenceItem);
+    }
+
+    // Purge devices that haven't sent a heartbeat in 20 seconds
+    this.activePresence = this.activePresence.filter(x => {
+      if (x.sessionId === this.sessionId) return true;
+      const seenTime = new Date(x.lastSeen || 0).getTime();
+      return now - seenTime < 20000;
+    });
+
+    this.notify();
   }
 
   public async initRealtimeSupabase() {
@@ -581,10 +784,13 @@ class TransitStore {
 
   public async sendPresenceHeartbeat(statusText?: string) {
     if (typeof window === 'undefined') return;
-    // 1. Supabase Realtime presence broadcast
+    // 1. MQTT Universal Presence Broadcast
+    this.broadcastMqttPresence(statusText);
+
+    // 2. Supabase Realtime presence broadcast
     await this.trackSupabasePresence(statusText);
 
-    // 2. HTTP Server heartbeat fallback
+    // 3. HTTP Server heartbeat fallback
     try {
       const user = this.currentUser;
       const activeTrip = user?.role === 'driver'
@@ -621,10 +827,27 @@ class TransitStore {
   public async pushRegistration(user: User, pass?: string) {
     if (typeof window === 'undefined') return;
 
-    // 1. Direct write into Supabase Database 'transit_users' table
-    await saveUserToSupabaseDb(user, pass);
+    // 1. MQTT Universal Live Broadcast (Immediately informs Admin and all open devices)
+    this.publishMqtt('al-ahsa-transit/v5/user-registered', {
+      user,
+      password: pass,
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1 });
 
-    // 2. Immediate broadcast to all connected devices via Supabase Realtime
+    // 2. Publish complete state with retain: true so devices joining later (e.g. Admin laptop) get it instantly
+    this.publishMqtt('al-ahsa-transit/v5/state', {
+      state: this.data,
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1, retain: true });
+
+    // 3. Direct write into Supabase Database 'transit_users' table
+    try {
+      await saveUserToSupabaseDb(user, pass);
+    } catch {}
+
+    // 4. Supabase Realtime Broadcast Channel
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {
         this.supabaseChannel.send({
@@ -675,7 +898,14 @@ class TransitStore {
       this.notify();
     }
 
-    // 2. Broadcast via Supabase Realtime WebSockets to all connected phones and passenger maps
+    // 2. MQTT High-Speed GPS Broadcast to all phones and admin dashboard
+    this.publishMqtt('al-ahsa-transit/v5/gps', {
+      tripId,
+      currentLocation: newLocation,
+      senderSessionId: this.sessionId
+    }, { qos: 0 });
+
+    // 3. Broadcast via Supabase Realtime WebSockets
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {
         this.supabaseChannel.send({
@@ -1033,7 +1263,15 @@ class TransitStore {
       console.warn('Failed to save to localStorage');
     }
     this.notify();
+    // 1. MQTT real-time state publish with retained message for instant cross-device sync
+    this.publishMqtt('al-ahsa-transit/v5/state', {
+      state: data,
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1, retain: true });
+    // 2. Supabase broadcast and table sync
     this.broadcastStateToSupabase(data);
+    // 3. Cloud Run server fallback
     this.pushToServer(data);
   }
 
@@ -1107,7 +1345,7 @@ class TransitStore {
   }
 
 
-  public registerAdmin(name: string, phone: string, email: string, pass: string): { success: boolean; user?: User; error?: string } {
+  public async registerAdmin(name: string, phone: string, email: string, pass: string): Promise<{ success: boolean; user?: User; error?: string }> {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPhone = phone.trim();
     const cleanName = name.trim();
@@ -1142,7 +1380,7 @@ class TransitStore {
     this.data.passwords[cleanPhone] = pass.trim();
     this.saveData(this.data);
     this.saveAuth(newAdmin);
-    this.pushRegistration(newAdmin, pass.trim());
+    await this.pushRegistration(newAdmin, pass.trim());
 
     return { success: true, user: newAdmin };
   }
@@ -1297,7 +1535,7 @@ class TransitStore {
     }
   }
 
-  public registerPassenger(name: string, phone: string, email: string, pass: string): { success: boolean; user?: User; error?: string } {
+  public async registerPassenger(name: string, phone: string, email: string, pass: string): Promise<{ success: boolean; user?: User; error?: string }> {
     if (!name || !phone || !pass) {
       return { success: false, error: 'جميع الحقول مطلوبة' };
     }
@@ -1322,12 +1560,12 @@ class TransitStore {
     this.data.passwords[newUser.phone.trim()] = pass.trim();
     this.saveData(this.data);
     this.saveAuth(newUser);
-    this.pushRegistration(newUser, pass.trim());
+    await this.pushRegistration(newUser, pass.trim());
 
     return { success: true, user: newUser };
   }
 
-  public registerDriver(data: {
+  public async registerDriver(data: {
     name: string;
     phone: string;
     email: string;
@@ -1336,7 +1574,7 @@ class TransitStore {
     model: string;
     seatsCount: number;
     busType: string;
-  }): { success: boolean; user?: User; error?: string } {
+  }): Promise<{ success: boolean; user?: User; error?: string }> {
     if (!data.name || !data.phone || !data.pass || !data.plateNumber || !data.model) {
       return { success: false, error: 'يرجى استكمال جميع بيانات السائق والحافلة' };
     }
@@ -1366,7 +1604,7 @@ class TransitStore {
     this.data.passwords[newDriver.email.toLowerCase()] = data.pass.trim();
     this.data.passwords[newDriver.phone.trim()] = data.pass.trim();
     this.saveData(this.data);
-    this.pushRegistration(newDriver, data.pass.trim());
+    await this.pushRegistration(newDriver, data.pass.trim());
 
     return { success: true, user: newDriver };
   }
@@ -1893,6 +2131,12 @@ class TransitStore {
     this.data.trips = this.data.trips.filter(t => t.id !== tripId);
     this.saveData(this.data);
 
+    // Broadcast trip deletion over MQTT immediately
+    this.publishMqtt('al-ahsa-transit/v5/trip-deleted', {
+      tripId,
+      senderSessionId: this.sessionId
+    }, { qos: 1 });
+
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {
         this.supabaseChannel.send({
@@ -1953,6 +2197,7 @@ class TransitStore {
     if (!driver) return { success: false, error: 'السائق غير موجود' };
     driver.status = 'active';
     this.saveData(this.data);
+    this.pushRegistration(driver);
     return { success: true };
   }
 
@@ -1961,6 +2206,7 @@ class TransitStore {
     if (!driver) return { success: false, error: 'السائق غير موجود' };
     driver.status = 'rejected';
     this.saveData(this.data);
+    this.pushRegistration(driver);
     return { success: true };
   }
 
@@ -2032,6 +2278,13 @@ class TransitStore {
     this.data.users = this.data.users.filter(u => u.id !== driverId);
     this.saveData(this.data);
 
+    // Broadcast user deletion over MQTT immediately to all devices
+    this.publishMqtt('al-ahsa-transit/v5/user-deleted', {
+      userId: driverId,
+      deletedTripIds: cancelledTripIds,
+      senderSessionId: this.sessionId
+    }, { qos: 1 });
+
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {
         this.supabaseChannel.send({
@@ -2077,6 +2330,12 @@ class TransitStore {
     // Remove user
     this.data.users = this.data.users.filter(u => u.id !== passengerId);
     this.saveData(this.data);
+
+    // Broadcast user deletion over MQTT immediately to all devices
+    this.publishMqtt('al-ahsa-transit/v5/user-deleted', {
+      userId: passengerId,
+      senderSessionId: this.sessionId
+    }, { qos: 1 });
 
     if (this.supabaseChannel && this.isSupabaseConnected) {
       try {

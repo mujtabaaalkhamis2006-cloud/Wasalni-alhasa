@@ -65,7 +65,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     setIsLoading(true);
     setErrorMsg(null);
 
-    const result = transitStore.registerPassenger(name, phone, email, password);
+    const result = await transitStore.registerPassenger(name, phone, email, password);
     await transitStore.syncWithServer();
     setIsLoading(false);
 
@@ -98,7 +98,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     setIsLoading(true);
     setErrorMsg(null);
 
-    const result = transitStore.registerDriver({
+    const result = await transitStore.registerDriver({
       name,
       phone,
       email,
@@ -154,7 +154,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     setIsLoading(true);
     setErrorMsg(null);
 
-    const result = transitStore.registerAdmin(adminName, phone, email, password);
+    const result = await transitStore.registerAdmin(adminName, phone, email, password);
     await transitStore.syncWithServer();
     setIsLoading(false);
 

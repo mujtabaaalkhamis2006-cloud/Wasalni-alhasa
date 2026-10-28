@@ -45,10 +45,13 @@ export function getSupabaseConfig(): SupabaseConfig {
   const cleanUrl = (url || '').trim();
   const cleanKey = (anonKey || '').trim();
 
+  const isDummyUrl = cleanUrl === 'https://supabase.co' || cleanUrl === 'http://supabase.co' || cleanUrl.endsWith('//supabase.co');
+  const isValidUrl = cleanUrl.startsWith('http') && !isDummyUrl;
+
   return {
     url: cleanUrl,
     anonKey: cleanKey,
-    isConfigured: Boolean(cleanUrl && cleanKey && cleanUrl.startsWith('http'))
+    isConfigured: Boolean(isValidUrl && cleanKey)
   };
 }
 
