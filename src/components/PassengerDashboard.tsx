@@ -670,7 +670,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                               <span>موقع السائق الفعلي (GPS حي)</span>
                             </span>
                             <span className="text-[11px] font-mono font-bold text-amber-300">
-                              ⚡ {typeof trip.currentLocation?.speed === 'number' ? `${trip.currentLocation.speed} كم/س` : '0 كم/س'}
+                              لوحة: {trip.busPlate}
                             </span>
                           </div>
                           <div className="flex items-center justify-between text-[11px] font-mono text-cyan-300" dir="ltr">
@@ -1047,8 +1047,9 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                       <span className="text-slate-500">|</span>
                       <span className="text-sky-400 font-mono" dir="ltr">{trackedTrip.driverPhone}</span>
                       <span className="text-slate-500">|</span>
-                      <span className="text-amber-400 font-bold font-mono">
-                        السرعة: {typeof trackedTrip.currentLocation?.speed === 'number' ? `${trackedTrip.currentLocation.speed} كم/س` : '0 كم/س'}
+                      <span className="text-emerald-400 font-bold flex items-center gap-1">
+                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                        <span>تتبع حي ومباشر</span>
                       </span>
                       {typeof trackedTrip.currentLocation?.heading === 'number' && (
                         <>

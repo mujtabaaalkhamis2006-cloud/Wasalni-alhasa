@@ -816,8 +816,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         </div>
 
                         <div className="text-left shrink-0">
-                          <div className="text-xs font-bold text-emerald-400 font-mono">
-                            ⚡ {speed} كم/س
+                          <div className="text-xs font-bold text-emerald-400 flex items-center gap-1 justify-end">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                            <span>تتبع حي 🟢</span>
                           </div>
                           <div className="text-[10px] text-sky-400 font-mono" dir="ltr">
                             {t.currentLocation ? `${t.currentLocation.lat.toFixed(3)}, ${t.currentLocation.lng.toFixed(3)}` : 'جاري التحديد'}
@@ -930,7 +931,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               <span>بث GPS حي نشط الآن</span>
                             </span>
                             <span className="font-mono text-amber-300">
-                              ⚡ {typeof activeDriverTrip.currentLocation?.speed === 'number' ? `${activeDriverTrip.currentLocation.speed} كم/س` : '0 كم/س'}
+                              لوحة: {activeDriverTrip.busPlate}
                             </span>
                           </div>
                           <div className="text-[10px] text-slate-300 flex items-center justify-between">
@@ -1479,7 +1480,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <span>بث GPS حي من جهاز السائق</span>
                         </span>
                         <span className="text-[11px] font-mono font-bold text-amber-300">
-                          ⚡ {typeof t.currentLocation?.speed === 'number' ? `${t.currentLocation.speed} كم/س` : '0 كم/س'}
+                          لوحة: {t.busPlate}
                         </span>
                       </div>
                       <div className="flex items-center justify-between text-[11px] font-mono text-cyan-300" dir="ltr">

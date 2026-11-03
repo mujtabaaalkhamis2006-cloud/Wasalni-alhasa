@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import L from 'leaflet';
 import { TransitRoute, TransitStation, Trip, Booking } from '../types/transit';
-import { MapPin, Bus, Navigation, Info, CheckCircle2, Crosshair, Compass, LocateFixed } from 'lucide-react';
+import { Bus, MapPin, Navigation, Crosshair, LocateFixed, Layers, Compass } from 'lucide-react';
 
 interface AlAhsaMapProps {
   routes: TransitRoute[];
@@ -18,11 +19,136 @@ interface AlAhsaMapProps {
   onSelectTrip?: (trip: Trip) => void;
 }
 
-// Default Bounding box for Al-Ahsa Oasis map view:
-const DEFAULT_MIN_LAT = 25.26;
-const DEFAULT_MAX_LAT = 25.64;
-const DEFAULT_MIN_LNG = 49.46;
-const DEFAULT_MAX_LNG = 49.76;
+// Al-Ahsa Oasis center (Hofuf / Mubarraz)
+const AL_AHSA_CENTER: [number, number] = [25.3835, 49.5862];
+const DEFAULT_ZOOM = 12;
+
+// Custom HTML Pin icons for stations, buses, user, and dropoffs
+function createStationIcon(station: TransitStation, isSelected: boolean, isNearest: boolean, isDriverStart: boolean) {
+  const isSpecial = isDriverStart || isNearest || isSelected;
+  const pinColor = isDriverStart ? '#10b981' : isNearest ? '#f59e0b' : isSelected ? '#38bdf8' : '#0284c7';
+  const label = isDriverStart
+    ? `📍 انطلاق السائق: ${station.nameAr.split('(')[0].trim()}`
+    : isNearest
+    ? `★ أقرب محطة: ${station.nameAr.split('(')[0].trim()}`
+    : station.nameAr.split('(')[0].trim();
+
+  const html = `
+    <div class="relative flex flex-col items-center group cursor-pointer select-none">
+      ${isSpecial ? `<span class="animate-ping absolute -top-1 w-5 h-5 rounded-full ${isDriverStart ? 'bg-emerald-400' : isNearest ? 'bg-amber-400' : 'bg-sky-400'} opacity-75"></span>` : ''}
+      <div style="background-color: ${pinColor}; box-shadow: 0 4px 14px rgba(0,0,0,0.45);" class="w-6 h-6 rounded-full border-2 border-white flex items-center justify-center text-white transition-transform duration-200 group-hover:scale-125">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+      </div>
+      <div class="mt-1 px-2 py-0.5 rounded-md shadow-lg text-[10px] font-bold whitespace-nowrap pointer-events-none ${
+        isDriverStart
+          ? 'bg-emerald-950 text-emerald-200 border border-emerald-500'
+          : isNearest
+          ? 'bg-amber-950 text-amber-200 border border-amber-500'
+          : 'bg-slate-900/90 text-slate-200 border border-slate-700'
+      }">
+        ${label}
+      </div>
+    </div>
+  `;
+
+  return L.divIcon({
+    html,
+    className: 'custom-station-icon',
+    iconSize: [120, 48],
+    iconAnchor: [60, 14],
+    popupAnchor: [0, -18]
+  });
+}
+
+function createBusIcon(trip: Trip, isTracked: boolean) {
+  const heading = trip.currentLocation?.heading || 0;
+  const label = isTracked
+    ? `تتبع حي: ${trip.busPlate}`
+    : trip.busPlate || trip.routeName.split(':')[0];
+
+  const html = `
+    <div class="relative flex flex-col items-center group cursor-pointer select-none">
+      ${isTracked ? '<span class="animate-ping absolute -top-2 w-10 h-10 rounded-full bg-amber-400 opacity-75"></span><span class="animate-pulse absolute -top-3 w-12 h-12 rounded-full bg-amber-500/30"></span>' : '<span class="animate-ping absolute -top-1 w-7 h-7 rounded-full bg-emerald-400 opacity-60"></span>'}
+      <div class="relative w-9 h-9 rounded-2xl border-2 border-white shadow-2xl flex items-center justify-center transition-transform duration-300 ${
+        isTracked
+          ? 'bg-gradient-to-tr from-amber-400 to-amber-600 text-slate-950 ring-4 ring-amber-400/50 shadow-amber-500/50 scale-110'
+          : 'bg-gradient-to-tr from-emerald-500 to-teal-600 text-slate-950 ring-2 ring-emerald-400/40 shadow-emerald-500/30'
+      }">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 animate-pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6v6"/><path d="M15 6v6"/><path d="M2 12h19.6"/><path d="M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.6-.3-1.1-.8-1.4l-1.7-.8c-.6-.3-1.4-.3-2 .1L16 13"/><path d="M4 18h11"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="16.5" cy="18.5" r="2.5"/></svg>
+        ${heading > 0 ? `
+          <div style="transform: rotate(${heading}deg);" class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-950 text-amber-400 flex items-center justify-center text-[8px] font-black border border-amber-400 shadow">
+            ▲
+          </div>
+        ` : ''}
+      </div>
+      <div class="mt-1 px-2.5 py-0.5 rounded-full shadow-xl text-[10px] font-black whitespace-nowrap pointer-events-none flex items-center gap-1.5 ${
+        isTracked
+          ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+          : 'bg-slate-950/90 text-emerald-300 border border-emerald-500/60'
+      }">
+        <span class="w-1.5 h-1.5 rounded-full ${isTracked ? 'bg-slate-950' : 'bg-emerald-400'} animate-ping"></span>
+        <span>${label}</span>
+      </div>
+    </div>
+  `;
+
+  return L.divIcon({
+    html,
+    className: 'custom-bus-icon',
+    iconSize: [140, 52],
+    iconAnchor: [70, 18],
+    popupAnchor: [0, -22]
+  });
+}
+
+function createUserIcon(label?: string) {
+  const html = `
+    <div class="relative flex flex-col items-center select-none">
+      <span class="animate-ping absolute -top-2 w-9 h-9 rounded-full bg-cyan-400 opacity-75"></span>
+      <span class="animate-pulse absolute -top-3 w-11 h-11 rounded-full bg-cyan-500/30"></span>
+      <div class="relative w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 text-white border-2 border-white shadow-2xl flex items-center justify-center ring-4 ring-cyan-500/40">
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/></svg>
+      </div>
+      <div class="mt-1 px-2.5 py-0.5 rounded-full bg-slate-950/95 border border-cyan-400 text-cyan-300 text-[10px] font-black whitespace-nowrap shadow-xl">
+        ${label || 'موقعك الحالي 📍'}
+      </div>
+    </div>
+  `;
+
+  return L.divIcon({
+    html,
+    className: 'custom-user-icon',
+    iconSize: [120, 50],
+    iconAnchor: [60, 16],
+    popupAnchor: [0, -20]
+  });
+}
+
+function createPassengerIcon(booking: Booking) {
+  const isBoarded = booking.status === 'boarded';
+  const html = `
+    <div class="relative flex flex-col items-center group cursor-pointer select-none">
+      <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-black shadow-lg border-2 border-white ${
+        isBoarded
+          ? 'bg-emerald-600 text-white'
+          : 'bg-amber-500 text-slate-950 animate-bounce'
+      }">
+        #${booking.seatNumber}
+      </div>
+      <div class="mt-0.5 px-1.5 py-0.5 rounded bg-slate-950/90 text-white text-[9px] font-bold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+        ${booking.passengerName} (نزول: ${booking.dropoffStation})
+      </div>
+    </div>
+  `;
+
+  return L.divIcon({
+    html,
+    className: 'custom-passenger-icon',
+    iconSize: [100, 40],
+    iconAnchor: [50, 14],
+    popupAnchor: [0, -16]
+  });
+}
 
 export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   routes,
@@ -39,108 +165,351 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   trackedTripId,
   onSelectTrip
 }) => {
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const routeLayersRef = useRef<L.LayerGroup | null>(null);
+  const stationMarkersRef = useRef<L.LayerGroup | null>(null);
+  const busMarkersRef = useRef<Map<string, L.Marker>>(new Map());
+  const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
+  const userMarkerRef = useRef<L.Marker | null>(null);
+  const passengerMarkersRef = useRef<L.LayerGroup | null>(null);
+
   const [filterRouteId, setFilterRouteId] = useState<string>(activeRouteId || 'all');
-  const [hoveredStation, setHoveredStation] = useState<TransitStation | null>(null);
-  const [hoveredTrip, setHoveredTrip] = useState<Trip | null>(null);
-  const [hoveredBooking, setHoveredBooking] = useState<Booking | null>(null);
+  const [mapTileStyle, setMapTileStyle] = useState<'streets' | 'satellite'>('streets');
+  const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   const displayedRoutes = routes.filter(r => filterRouteId === 'all' || r.id === filterRouteId);
   const activeTrips = trips.filter(t => t.status === 'in_progress');
-  const trackedTrip = trips.find(t => t.id === trackedTripId);
+  const trackedTrip = trips.find(t => t.id === trackedTripId) || activeTrips[0];
 
-  // Dynamic Map Bounds ensuring all stations, live buses, and the user's real device position fit comfortably
-  const { coordsToPercent, mapBounds } = React.useMemo(() => {
-    let minLat = DEFAULT_MIN_LAT;
-    let maxLat = DEFAULT_MAX_LAT;
-    let minLng = DEFAULT_MIN_LNG;
-    let maxLng = DEFAULT_MAX_LNG;
+  // Initialize Real Leaflet Map
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    // CartoDB Dark Matter / Voyager or OpenStreetMap
+    const initialTileUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+
+    const map = L.map(mapContainerRef.current, {
+      center: AL_AHSA_CENTER,
+      zoom: DEFAULT_ZOOM,
+      zoomControl: false,
+      attributionControl: false
+    });
+
+    const tile = L.tileLayer(initialTileUrl, {
+      maxZoom: 19,
+      subdomains: 'abcd'
+    }).addTo(map);
+
+    tileLayerRef.current = tile;
+
+    // Custom Zoom controls at bottom-left
+    L.control.zoom({ position: 'bottomleft' }).addTo(map);
+
+    routeLayersRef.current = L.layerGroup().addTo(map);
+    stationMarkersRef.current = L.layerGroup().addTo(map);
+    passengerMarkersRef.current = L.layerGroup().addTo(map);
+
+    // Map click handler for custom drop-off point selection
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      if (!onSelectCustomPoint || !interactive) return;
+      onSelectCustomPoint({
+        lat: Number(e.latlng.lat.toFixed(5)),
+        lng: Number(e.latlng.lng.toFixed(5)),
+        name: `نقطة نزول مخصصة بالخريطة (${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)})`
+      });
+    });
+
+    mapRef.current = map;
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  // Toggle Map Style: Streets vs Satellite
+  useEffect(() => {
+    if (!mapRef.current || !tileLayerRef.current) return;
+    mapRef.current.removeLayer(tileLayerRef.current);
+
+    const newUrl = mapTileStyle === 'satellite'
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+
+    const newTile = L.tileLayer(newUrl, {
+      maxZoom: mapTileStyle === 'satellite' ? 18 : 19,
+      subdomains: 'abcd'
+    }).addTo(mapRef.current);
+
+    tileLayerRef.current = newTile;
+  }, [mapTileStyle]);
+
+  // Render Routes and Real Route Paths
+  useEffect(() => {
+    if (!mapRef.current || !routeLayersRef.current) return;
+    routeLayersRef.current.clearLayers();
+
+    displayedRoutes.forEach(route => {
+      if (route.stations.length < 2) return;
+      const latlngs: [number, number][] = route.stations.map(s => [s.lat, s.lng]);
+
+      // Glow underlay line
+      L.polyline(latlngs, {
+        color: route.color,
+        weight: 8,
+        opacity: 0.35,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(routeLayersRef.current!);
+
+      // Main Route line
+      const line = L.polyline(latlngs, {
+        color: route.color,
+        weight: 4,
+        opacity: 0.95,
+        dashArray: '6, 6',
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(routeLayersRef.current!);
+
+      line.bindTooltip(`مسار ${route.code}: ${route.nameAr} (${route.price} ر.س)`, {
+        direction: 'top',
+        className: 'route-tooltip font-bold text-xs'
+      });
+    });
+  }, [displayedRoutes]);
+
+  // Render Stations
+  useEffect(() => {
+    if (!mapRef.current || !stationMarkersRef.current) return;
+    stationMarkersRef.current.clearLayers();
+
+    const uniqueStations = displayedRoutes
+      .flatMap(r => r.stations)
+      .reduce<TransitStation[]>((acc, s) => {
+        if (!acc.some(x => x.id === s.id)) acc.push(s);
+        return acc;
+      }, []);
+
+    uniqueStations.forEach(station => {
+      const isSelected = selectedStation?.id === station.id;
+      const isNearest = nearestStationId === station.id;
+      const isDriverStart =
+        station.id.startsWith('st-driver-gps') ||
+        station.id.startsWith('st-gps') ||
+        Boolean(station.area && station.area.includes('انطلاق السائق'));
+
+      const marker = L.marker([station.lat, station.lng], {
+        icon: createStationIcon(station, isSelected, isNearest, isDriverStart),
+        zIndexOffset: isSelected || isNearest || isDriverStart ? 500 : 100
+      });
+
+      marker.on('click', () => {
+        if (onSelectStation) onSelectStation(station);
+      });
+
+      marker.bindPopup(`
+        <div class="text-right p-1 font-sans" dir="rtl">
+          <div class="font-bold text-slate-900 text-xs mb-1">📍 ${station.nameAr}</div>
+          <div class="text-[11px] text-slate-600 mb-1.5">المنطقة: ${station.area}</div>
+          <button class="w-full py-1 px-2 text-[10px] bg-sky-600 text-white rounded font-bold">انقر لتحديد هذه المحطة للنزول</button>
+        </div>
+      `);
+
+      marker.addTo(stationMarkersRef.current!);
+    });
+  }, [displayedRoutes, selectedStation, nearestStationId, onSelectStation]);
+
+  // Render Passenger Dropoffs in Driver View
+  useEffect(() => {
+    if (!mapRef.current || !passengerMarkersRef.current) return;
+    passengerMarkersRef.current.clearLayers();
+
+    if (isDriverView && passengerBookings.length > 0) {
+      passengerBookings.forEach(b => {
+        if (!b.dropoffCoordinates) return;
+        const marker = L.marker([b.dropoffCoordinates.lat, b.dropoffCoordinates.lng], {
+          icon: createPassengerIcon(b),
+          zIndexOffset: 300
+        });
+
+        marker.bindPopup(`
+          <div class="text-right p-1 font-sans" dir="rtl">
+            <div class="font-bold text-slate-900 text-xs">راكب: ${b.passengerName} (مقعد #${b.seatNumber})</div>
+            <div class="text-[11px] text-slate-600">محطة النزول: ${b.dropoffStation}</div>
+            <div class="text-[11px] text-slate-600">الجوال: ${b.passengerPhone}</div>
+            <div class="mt-1 font-bold ${b.status === 'boarded' ? 'text-emerald-600' : 'text-amber-600'} text-[11px]">
+              ${b.status === 'boarded' ? 'صعد للحافلة ✓' : 'في انتظار الصعود'}
+            </div>
+          </div>
+        `);
+
+        marker.addTo(passengerMarkersRef.current!);
+      });
+    }
+  }, [isDriverView, passengerBookings]);
+
+  // Render User Marker
+  useEffect(() => {
+    if (!mapRef.current) return;
 
     if (userLocation && typeof userLocation.lat === 'number' && typeof userLocation.lng === 'number') {
-      minLat = Math.min(minLat, userLocation.lat);
-      maxLat = Math.max(maxLat, userLocation.lat);
-      minLng = Math.min(minLng, userLocation.lng);
-      maxLng = Math.max(maxLng, userLocation.lng);
+      if (!userMarkerRef.current) {
+        userMarkerRef.current = L.marker([userLocation.lat, userLocation.lng], {
+          icon: createUserIcon(userLocation.label),
+          zIndexOffset: 800
+        }).addTo(mapRef.current);
+      } else {
+        userMarkerRef.current.setLatLng([userLocation.lat, userLocation.lng]);
+      }
+    } else if (userMarkerRef.current) {
+      userMarkerRef.current.remove();
+      userMarkerRef.current = null;
+    }
+  }, [userLocation]);
+
+  // Live Driver Trajectory & Moving Bus Tracking (مسار السائق اذا بدأ وحركة التتبع المباشرة معه)
+  useEffect(() => {
+    if (!mapRef.current) return;
+
+    // 1. Draw Active Driver Route Polyline when trip is in_progress
+    if (activeRoutePolylineRef.current) {
+      activeRoutePolylineRef.current.remove();
+      activeRoutePolylineRef.current = null;
     }
 
-    trips.forEach(t => {
-      if (t.status === 'in_progress' && t.currentLocation) {
-        minLat = Math.min(minLat, t.currentLocation.lat);
-        maxLat = Math.max(maxLat, t.currentLocation.lat);
-        minLng = Math.min(minLng, t.currentLocation.lng);
-        maxLng = Math.max(maxLng, t.currentLocation.lng);
+    if (trackedTrip && trackedTrip.status === 'in_progress') {
+      const tripRoute = routes.find(r => r.id === trackedTrip.routeId);
+      const points: [number, number][] = [];
+
+      // Start from current bus location
+      if (trackedTrip.currentLocation) {
+        points.push([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng]);
+      }
+
+      // Add route stations
+      if (tripRoute && tripRoute.stations) {
+        tripRoute.stations.forEach(s => points.push([s.lat, s.lng]));
+      }
+
+      if (points.length >= 2) {
+        activeRoutePolylineRef.current = L.polyline(points, {
+          color: '#10b981',
+          weight: 5,
+          opacity: 0.9,
+          dashArray: '8, 8',
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(mapRef.current);
+
+        activeRoutePolylineRef.current.bindTooltip(
+          `مسار السائق المباشر (${trackedTrip.driverName} - ${trackedTrip.busPlate})`,
+          { permanent: false, direction: 'top', className: 'driver-path-tooltip font-bold text-xs' }
+        );
+      }
+    }
+
+    // 2. Update Live Bus Markers with smooth motion
+    const existingKeys = new Set(busMarkersRef.current.keys());
+
+    activeTrips.forEach(trip => {
+      const lat = trip.currentLocation?.lat || 25.38;
+      const lng = trip.currentLocation?.lng || 49.58;
+      const isTracked = trackedTripId === trip.id;
+
+      let marker = busMarkersRef.current.get(trip.id);
+
+      if (!marker) {
+        marker = L.marker([lat, lng], {
+          icon: createBusIcon(trip, isTracked),
+          zIndexOffset: isTracked ? 1000 : 600
+        }).addTo(mapRef.current!);
+
+        marker.on('click', () => {
+          if (onSelectTrip) onSelectTrip(trip);
+        });
+
+        marker.bindPopup(`
+          <div class="text-right p-1.5 font-sans" dir="rtl">
+            <div class="font-bold text-slate-900 text-xs mb-1">🚌 ${trip.routeName}</div>
+            <div class="text-[11px] text-slate-700">السائق: <strong>${trip.driverName}</strong></div>
+            <div class="text-[11px] text-slate-700">الحافلة: ${trip.busModel} (${trip.busPlate})</div>
+            <div class="text-[11px] text-slate-700">المقاعد المتبقية: ${trip.availableSeats} من ${trip.totalSeats}</div>
+            <div class="mt-1 text-emerald-600 font-bold text-[11px]">حافلة جارية على الطريق مباشرة 🟢</div>
+          </div>
+        `);
+
+        busMarkersRef.current.set(trip.id, marker);
+      } else {
+        // Smoothly animate marker to new GPS coordinate
+        marker.setLatLng([lat, lng]);
+        marker.setIcon(createBusIcon(trip, isTracked));
+        marker.setZIndexOffset(isTracked ? 1000 : 600);
+      }
+
+      existingKeys.delete(trip.id);
+    });
+
+    // Remove finished/cancelled trips
+    existingKeys.forEach(tripId => {
+      const m = busMarkersRef.current.get(tripId);
+      if (m) {
+        m.remove();
+        busMarkersRef.current.delete(tripId);
       }
     });
+  }, [activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip]);
 
-    const latPad = (maxLat - minLat) * 0.08 || 0.02;
-    const lngPad = (maxLng - minLng) * 0.08 || 0.02;
-
-    const bMinLat = minLat - latPad;
-    const bMaxLat = maxLat + latPad;
-    const bMinLng = minLng - lngPad;
-    const bMaxLng = maxLng + lngPad;
-
-    const toPercent = (lat: number, lng: number) => {
-      const x = Math.max(4, Math.min(96, ((lng - bMinLng) / (bMaxLng - bMinLng)) * 92 + 4));
-      const y = Math.max(4, Math.min(96, ((bMaxLat - lat) / (bMaxLat - bMinLat)) * 92 + 4));
-      return { x, y };
-    };
-
-    return {
-      coordsToPercent: toPercent,
-      mapBounds: { bMinLat, bMaxLat, bMinLng, bMaxLng }
-    };
-  }, [userLocation, trips]);
-
-  const handleMapClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!onSelectCustomPoint || !interactive) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = (e.clientX - rect.left) / rect.width;
-    const clickY = (e.clientY - rect.top) / rect.height;
-
-    // Convert back from percent to lat/lng
-    const { bMinLat, bMaxLat, bMinLng, bMaxLng } = mapBounds;
-    const lng = bMinLng + ((clickX * 100 - 4) / 92) * (bMaxLng - bMinLng);
-    const lat = bMaxLat - ((clickY * 100 - 4) / 92) * (bMaxLat - bMinLat);
-
-    onSelectCustomPoint({
-      lat: Number(lat.toFixed(4)),
-      lng: Number(lng.toFixed(4)),
-      name: `نقطة مخصصة على الخريطة (${lat.toFixed(2)}, ${lng.toFixed(2)})`
-    });
+  // Auto-pan map smoothly to follow tracked bus
+  const handleCenterOnBus = () => {
+    if (!mapRef.current || !trackedTrip?.currentLocation) return;
+    mapRef.current.flyTo(
+      [trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng],
+      15,
+      { animate: true, duration: 1.2 }
+    );
   };
 
-  const allStations = routes.flatMap(r => r.stations);
-  const nearestStation = nearestStationId ? allStations.find(s => s.id === nearestStationId) : null;
-  const userPercent = userLocation ? coordsToPercent(userLocation.lat, userLocation.lng) : null;
-  const nearestPercent = nearestStation ? coordsToPercent(nearestStation.lat, nearestStation.lng) : null;
-  const trackedBusPercent = trackedTrip?.currentLocation ? coordsToPercent(trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng) : null;
+  const handleCenterOnUser = () => {
+    if (!mapRef.current || !userLocation) return;
+    mapRef.current.flyTo([userLocation.lat, userLocation.lng], 15, { animate: true, duration: 1.2 });
+  };
+
+  const handleResetAlAhsaView = () => {
+    if (!mapRef.current) return;
+    mapRef.current.flyTo(AL_AHSA_CENTER, DEFAULT_ZOOM, { animate: true, duration: 1 });
+  };
 
   return (
-    <div className="relative w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
+    <div className="relative w-full bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
       {/* Map Header / Filters */}
-      <div className="p-4 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center">
+      <div className="p-3.5 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center border border-sky-500/30">
             <Navigation className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="font-bold text-white text-sm">
-              {isDriverView ? 'خريطة ركاب الرحلة والنزول' : 'خريطة مسارات حافلات الأحساء المباشرة'}
+            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+              <span>{isDriverView ? 'خريطة ركاب الرحلة ونقاط النزول' : 'خريطة حافلات الأحساء الحقيقية (Real Map)'}</span>
+              <span className="text-[10px] bg-sky-950 text-sky-300 border border-sky-800 px-2 py-0.5 rounded-full font-bold">
+                OpenStreetMap / Sat
+              </span>
             </h3>
-            <p className="text-xs text-slate-400">
+            <p className="text-[11px] text-slate-400">
               {isDriverView
-                ? 'مواقع نزول ركابك على مسار الرحلة'
-                : 'تحديث حي لمواقع الحافلات الجارية كل 10 ثوانٍ'}
+                ? 'مواقع الركاب ومسار حركتك الفعلي على شوارع الأحساء'
+                : 'تتبع حركة ومسار الحافلة خطوة بخطوة بالوقت الفعلي'}
             </p>
           </div>
         </div>
 
         {/* Route switcher tabs */}
         {!isDriverView && (
-          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-800/80 rounded-xl">
+          <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-800/80 rounded-xl border border-slate-700/60">
             <button
               onClick={() => setFilterRouteId('all')}
-              className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all ${
+              className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all ${
                 filterRouteId === 'all'
                   ? 'bg-sky-600 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -152,7 +521,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
               <button
                 key={r.id}
                 onClick={() => setFilterRouteId(r.id)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${
                   filterRouteId === r.id
                     ? 'bg-white text-slate-950 shadow-sm'
                     : 'text-slate-400 hover:text-white'
@@ -165,410 +534,125 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
           </div>
         )}
 
-        {/* Live buses pulse tag */}
-        <div className="flex items-center gap-2 text-xs text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2.5 py-1 rounded-full">
-          <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-          </span>
-          <span>{activeTrips.length} حافلة جارية الآن</span>
+        {/* Live buses count & layer switcher */}
+        <div className="flex items-center gap-2">
+          {/* Map Style Toggle */}
+          <button
+            type="button"
+            onClick={() => setMapTileStyle(prev => prev === 'streets' ? 'satellite' : 'streets')}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs text-sky-300 font-bold transition-all shadow"
+            title="تبديل نمط الخريطة بين الشوارع والقمر الصناعي"
+          >
+            <Layers className="w-3.5 h-3.5 text-sky-400" />
+            <span>{mapTileStyle === 'satellite' ? 'عرض الشوارع 🗺️' : 'قمر صناعي 🛰️'}</span>
+          </button>
+
+          <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-950/70 border border-emerald-800/60 px-2.5 py-1 rounded-full font-bold">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span>{activeTrips.length} حافلة تسير الآن</span>
+          </div>
         </div>
       </div>
 
-      {/* Interactive Map Visual Stage */}
-      <div
-        className="relative w-full h-[400px] sm:h-[480px] bg-[#0c1427] cursor-crosshair overflow-hidden select-none"
-        onClick={handleMapClick}
-      >
-        {/* Subtle Map Grid & Oasis Geographic Styling */}
-        <div
-          className="absolute inset-0 opacity-15 pointer-events-none"
-          style={{
-            backgroundImage:
-              'radial-gradient(#38bdf8 1px, transparent 1px), linear-gradient(to right, #1e293b 1px, transparent 1px), linear-gradient(to bottom, #1e293b 1px, transparent 1px)',
-            backgroundSize: '40px 40px'
-          }}
-        />
+      {/* Map Container Area */}
+      <div className="relative w-full h-[430px] sm:h-[500px] overflow-hidden bg-slate-950">
+        <div ref={mapContainerRef} className="w-full h-full z-10" />
 
-        {/* Oasis green zones / landmarks watermark */}
-        <div className="absolute top-[35%] right-[20%] w-36 h-28 bg-emerald-900/10 rounded-full blur-2xl pointer-events-none" />
-        <div className="absolute top-[20%] left-[25%] w-48 h-36 bg-sky-900/10 rounded-full blur-3xl pointer-events-none" />
-
-        {/* Area Names Watermarks */}
-        <div className="absolute top-[18%] left-[45%] text-[11px] font-bold text-slate-700/60 pointer-events-none">
-          شمال الأحساء (العيون)
-        </div>
-        <div className="absolute top-[38%] left-[28%] text-[11px] font-bold text-slate-700/60 pointer-events-none">
-          مدينة المبرز
-        </div>
-        <div className="absolute top-[52%] left-[38%] text-[11px] font-bold text-slate-700/60 pointer-events-none">
-          مدينة الهفوف
-        </div>
-        <div className="absolute top-[48%] right-[15%] text-[11px] font-bold text-slate-700/60 pointer-events-none">
-          القرى الشرقية وجبل القارة
-        </div>
-        <div className="absolute bottom-[10%] left-[12%] text-[11px] font-bold text-slate-700/60 pointer-events-none">
-          مطار الأحساء الدولي
-        </div>
-
-        {/* SVG Route Paths & Connection Lines */}
-        <svg className="absolute inset-0 w-full h-full pointer-events-none">
-          <defs>
-            {displayedRoutes.map(route => (
-              <linearGradient key={`grad-${route.id}`} id={`grad-${route.id}`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor={route.color} stopOpacity="0.8" />
-                <stop offset="100%" stopColor={route.color} stopOpacity="1" />
-              </linearGradient>
-            ))}
-          </defs>
-
-          {/* Dotted Walking Connection from User Location to Nearest Station */}
-          {userPercent && nearestPercent && (
-            <g key="user-to-nearest-link">
-              <line
-                x1={`${userPercent.x}%`}
-                y1={`${userPercent.y}%`}
-                x2={`${nearestPercent.x}%`}
-                y2={`${nearestPercent.y}%`}
-                stroke="#06b6d4"
-                strokeWidth="3"
-                strokeDasharray="6 4"
-                strokeLinecap="round"
-                opacity="0.85"
-              />
-            </g>
-          )}
-
-          {/* Dotted Radar Tracking Line from User Location to Tracked Bus */}
-          {userPercent && trackedBusPercent && (
-            <g key="user-to-tracked-bus-link">
-              <line
-                x1={`${userPercent.x}%`}
-                y1={`${userPercent.y}%`}
-                x2={`${trackedBusPercent.x}%`}
-                y2={`${trackedBusPercent.y}%`}
-                stroke="#f59e0b"
-                strokeWidth="3.5"
-                strokeDasharray="5 3"
-                strokeLinecap="round"
-                opacity="0.9"
-              />
-            </g>
-          )}
-
-          {displayedRoutes.map(route => {
-            if (route.stations.length < 2) return null;
-            const points = route.stations.map(st => {
-              const { x, y } = coordsToPercent(st.lat, st.lng);
-              return `${x}%,${y}%`;
-            });
-            const pathData = `M ${points[0]} ` + points.slice(1).map(p => `L ${p}`).join(' ');
-
-            return (
-              <g key={`route-path-${route.id}`}>
-                {/* Route Glow */}
-                <path
-                  d={pathData}
-                  fill="none"
-                  stroke={route.color}
-                  strokeWidth="8"
-                  strokeOpacity="0.25"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                {/* Core Route Line */}
-                <path
-                  d={pathData}
-                  fill="none"
-                  stroke={route.color}
-                  strokeWidth="3.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeDasharray="6 2"
-                />
-              </g>
-            );
-          })}
-        </svg>
-
-        {/* Stations Markers */}
-        {displayedRoutes.flatMap(r => r.stations).reduce<TransitStation[]>((acc, s) => {
-          if (!acc.some(x => x.id === s.id)) acc.push(s);
-          return acc;
-        }, []).map(station => {
-          const { x, y } = coordsToPercent(station.lat, station.lng);
-          const isSelected = selectedStation?.id === station.id;
-          const isNearest = nearestStationId === station.id;
-          const isDriverStart = station.id.startsWith('st-driver-gps') || station.id.startsWith('st-gps') || (station.area && station.area.includes('انطلاق السائق'));
-
-          return (
-            <div
-              key={`marker-${station.id}`}
-              style={{ left: `${x}%`, top: `${y}%` }}
-              className="absolute -translate-x-1/2 -translate-y-1/2 z-20 group cursor-pointer"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onSelectStation) onSelectStation(station);
-              }}
-              onMouseEnter={() => setHoveredStation(station)}
-              onMouseLeave={() => setHoveredStation(null)}
+        {/* Floating Quick Navigation Controls (Top Left) */}
+        <div className="absolute top-3 left-3 z-[400] flex flex-col gap-2">
+          {trackedTrip?.currentLocation && (
+            <button
+              type="button"
+              onClick={handleCenterOnBus}
+              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xl transition-all border border-amber-300"
+              title="تركيز الكاميرا على الحافلة المتتبعة"
             >
-              <div
-                className={`relative flex items-center justify-center transition-transform group-hover:scale-125 ${
-                  isSelected || isNearest || isDriverStart ? 'scale-125' : ''
-                }`}
-              >
-                {/* Pulse ring if this is the nearest station or driver departure station */}
-                {isDriverStart ? (
-                  <span className="animate-ping absolute -inset-2 rounded-full bg-emerald-400 opacity-75" />
-                ) : isNearest ? (
-                  <span className="animate-ping absolute -inset-2 rounded-full bg-amber-400 opacity-75" />
-                ) : null}
+              <Bus className="w-4 h-4" />
+              <span>متابعة موقع الحافلة 🎯</span>
+            </button>
+          )}
 
-                <div
-                  className={`w-4 h-4 rounded-full border-2 transition-colors ${
-                    isDriverStart
-                      ? 'bg-emerald-500 border-white ring-4 ring-emerald-500/50 shadow-lg'
-                      : isNearest
-                      ? 'bg-amber-400 border-white ring-4 ring-amber-400/50 shadow-lg'
-                      : isSelected
-                      ? 'bg-amber-400 border-white ring-4 ring-amber-400/40 shadow-lg'
-                      : 'bg-slate-900 border-sky-400 group-hover:border-white'
-                  }`}
-                />
-                <span className={`absolute -bottom-5 whitespace-nowrap text-[10px] font-bold px-1.5 py-0.5 rounded shadow pointer-events-none ${
-                  isDriverStart
-                    ? 'text-emerald-300 bg-emerald-950/90 border border-emerald-500/60 z-30'
-                    : isNearest
-                    ? 'text-amber-300 bg-amber-950/90 border border-amber-500/60 z-30'
-                    : 'text-slate-300 bg-slate-950/80'
-                }`}>
-                  {isDriverStart ? `📍 انطلاق السائق: ${station.nameAr.split('(')[0].trim()}` : isNearest ? `★ أقرب محطة: ${station.nameAr.split('(')[0].trim()}` : station.nameAr.split('(')[0].trim()}
-                </span>
-              </div>
-            </div>
-          );
-        })}
+          {userLocation && (
+            <button
+              type="button"
+              onClick={handleCenterOnUser}
+              className="px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-xl transition-all border border-sky-400"
+              title="التركيز على موقعك"
+            >
+              <LocateFixed className="w-4 h-4" />
+              <span>موقعي الحالي</span>
+            </button>
+          )}
 
-        {/* User Current Location Marker */}
-        {userLocation && userPercent && (
-          <div
-            key="user-location-marker"
-            style={{ left: `${userPercent.x}%`, top: `${userPercent.y}%` }}
-            className="absolute -translate-x-1/2 -translate-y-1/2 z-35 cursor-pointer pointer-events-auto"
-            title="موقعك الحالي عبر GPS"
+          <button
+            type="button"
+            onClick={handleResetAlAhsaView}
+            className="px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-slate-800 text-slate-300 font-bold text-[11px] flex items-center gap-1 shadow-md border border-slate-700 backdrop-blur-sm"
+            title="إعادة ضبط الرؤية لوسط الأحساء"
           >
-            <div className="relative flex flex-col items-center">
-              {/* Radar waves */}
-              <span className="animate-ping absolute -inset-3 rounded-full bg-cyan-400 opacity-75 pointer-events-none" />
-              <span className="animate-pulse absolute -inset-5 rounded-full bg-cyan-500/30 pointer-events-none" />
-
-              {/* Pin body */}
-              <div className="relative w-8 h-8 rounded-full bg-gradient-to-tr from-cyan-500 to-blue-600 text-white border-2 border-white shadow-2xl flex items-center justify-center ring-4 ring-cyan-500/40">
-                <LocateFixed className="w-4 h-4" />
-              </div>
-
-              {/* Tag */}
-              <div className="mt-1 bg-slate-950/95 border border-cyan-400 text-cyan-300 text-[10px] font-black px-2.5 py-0.5 rounded-full whitespace-nowrap shadow-xl flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-                <span>{userLocation.label || `موقع جهازك الفعلي 📍 (${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)})`}</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Live Buses (in_progress) with moving pulse and active tracking radar */}
-        {activeTrips.map(trip => {
-          const lat = trip.currentLocation?.lat || 25.38;
-          const lng = trip.currentLocation?.lng || 49.58;
-          const { x, y } = coordsToPercent(lat, lng);
-          const isTracked = trackedTripId === trip.id;
-
-          return (
-            <div
-              key={`bus-${trip.id}`}
-              style={{ left: `${x}%`, top: `${y}%` }}
-              className={`absolute -translate-x-1/2 -translate-y-1/2 transition-all duration-1000 ease-out cursor-pointer ${
-                isTracked ? 'z-40 scale-125' : 'z-30 hover:scale-115'
-              }`}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onSelectTrip) onSelectTrip(trip);
-              }}
-              onMouseEnter={() => setHoveredTrip(trip)}
-              onMouseLeave={() => setHoveredTrip(null)}
-            >
-              <div className="relative">
-                {/* Radar ripples */}
-                {isTracked ? (
-                  <>
-                    <span className="animate-ping absolute -inset-4 rounded-full bg-amber-400 opacity-75" />
-                    <span className="animate-pulse absolute -inset-6 rounded-full bg-amber-500/30" />
-                  </>
-                ) : (
-                  <span className="animate-ping absolute -inset-2 rounded-full bg-emerald-400 opacity-60" />
-                )}
-
-                <div
-                  className={`relative w-8 h-8 rounded-full border-2 border-white shadow-xl flex items-center justify-center transition-all ${
-                    isTracked
-                      ? 'bg-gradient-to-tr from-amber-400 to-amber-600 text-slate-950 ring-4 ring-amber-400/60 shadow-amber-500/50'
-                      : 'bg-emerald-500 text-slate-950'
-                  }`}
-                >
-                  <Bus className="w-4 h-4 animate-pulse" />
-                  {typeof trip.currentLocation?.heading === 'number' && trip.currentLocation.heading > 0 && (
-                    <div
-                      className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-slate-950 text-amber-400 flex items-center justify-center text-[8px] font-black border border-amber-400 shadow"
-                      style={{ transform: `rotate(${trip.currentLocation.heading}deg)` }}
-                      title={`الاتجاه: ${trip.currentLocation.heading}°`}
-                    >
-                      ▲
-                    </div>
-                  )}
-                </div>
-
-                {isTracked ? (
-                  <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-amber-500 text-slate-950 font-black text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap shadow-lg flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-slate-950 animate-ping" />
-                    <span>تتبع حي: {trip.busPlate} ({typeof trip.currentLocation?.speed === 'number' ? `${trip.currentLocation.speed} كم/س` : 'مباشر'})</span>
-                  </div>
-                ) : (
-                  <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-950/90 border border-emerald-500/50 text-[10px] text-emerald-400 font-bold px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-md">
-                    {trip.routeName.split(':')[0]}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+            <Compass className="w-3.5 h-3.5 text-sky-400" />
+            <span>وسط الأحساء</span>
+          </button>
+        </div>
 
         {/* Active Bus Tracking HUD overlay */}
-        {trackedTrip && (
-          <div className="absolute top-3 left-3 z-35 bg-slate-900/95 border border-amber-500/70 p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3 animate-in fade-in">
-            <div className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex items-center justify-center shrink-0">
-              <Bus className="w-5 h-5 animate-bounce" />
+        {trackedTrip && trackedTrip.status === 'in_progress' && (
+          <div className="absolute bottom-4 left-4 right-4 sm:right-auto sm:max-w-md z-[400] bg-slate-900/95 border-2 border-emerald-500/70 p-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 flex items-center justify-center shrink-0">
+              <Bus className="w-5 h-5 animate-pulse" />
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
-                <span className="text-xs font-black text-amber-300">
-                  موقع السائق الفعلي مباشر ({trackedTrip.driverName} - {trackedTrip.busPlate})
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                <span className="text-xs font-black text-white truncate">
+                  {trackedTrip.routeName.split('(')[0]}
                 </span>
-                <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-800 px-1.5 py-0.5 rounded font-bold font-mono">
-                  ⚡ {typeof trackedTrip.currentLocation?.speed === 'number' ? `${trackedTrip.currentLocation.speed} كم/س` : 'حي'}
+                <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-700 px-2 py-0.5 rounded-full font-bold shrink-0">
+                  تتبع مباشر نشط 🟢
                 </span>
               </div>
-              <div className="text-[11px] text-slate-300 mt-0.5 flex flex-wrap items-center gap-2">
-                <span>المسار: <strong className="text-white">{trackedTrip.routeName.split('(')[0]}</strong></span>
+              <div className="text-[11px] text-slate-300 mt-1 flex flex-wrap items-center gap-2">
+                <span>الكابتن: <strong className="text-white">{trackedTrip.driverName}</strong></span>
                 <span className="text-slate-600">•</span>
-                <span className="text-cyan-300 font-mono text-[10px]" dir="ltr">
-                  GPS: {trackedTrip.currentLocation ? `${trackedTrip.currentLocation.lat.toFixed(5)}, ${trackedTrip.currentLocation.lng.toFixed(5)}` : 'جاري استقبال الإشارة'}
-                </span>
+                <span className="text-amber-300 font-mono font-bold">{trackedTrip.busPlate}</span>
+                {trackedTrip.currentLocation && (
+                  <>
+                    <span className="text-slate-600">•</span>
+                    <span className="text-cyan-300 font-mono text-[10px]" dir="ltr">
+                      GPS: {trackedTrip.currentLocation.lat.toFixed(4)}, {trackedTrip.currentLocation.lng.toFixed(4)}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* Driver View: Passenger dropoff pins */}
-        {isDriverView &&
-          passengerBookings.map((booking, idx) => {
-            if (!booking.dropoffCoordinates) return null;
-            const { x, y } = coordsToPercent(booking.dropoffCoordinates.lat, booking.dropoffCoordinates.lng);
-            const isBoarded = booking.status === 'boarded';
-
-            return (
-              <div
-                key={`passenger-pin-${booking.id}`}
-                style={{ left: `${x}%`, top: `${y}%` }}
-                className="absolute -translate-x-1/2 -translate-y-1/2 z-25 cursor-pointer"
-                onMouseEnter={() => setHoveredBooking(booking)}
-                onMouseLeave={() => setHoveredBooking(null)}
-              >
-                <div className="relative group">
-                  <div
-                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shadow-md border ${
-                      isBoarded
-                        ? 'bg-emerald-600 text-white border-emerald-300'
-                        : 'bg-amber-500 text-slate-950 border-white animate-bounce'
-                    }`}
-                  >
-                    {booking.seatNumber}
-                  </div>
-                  <div className="absolute top-7 left-1/2 -translate-x-1/2 bg-slate-950/90 text-white text-[9px] px-1 py-0.5 rounded whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
-                    {booking.passengerName} (مقعد {booking.seatNumber})
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-
-        {/* Hover Popover: Station Details */}
-        {hoveredStation && (
-          <div className="absolute bottom-4 right-4 z-40 bg-slate-900/95 border border-slate-700 p-3 rounded-xl shadow-xl max-w-xs text-xs pointer-events-none backdrop-blur-md">
-            <div className="font-bold text-white mb-1 flex items-center gap-1.5">
-              <MapPin className="w-3.5 h-3.5 text-sky-400" />
-              <span>{hoveredStation.nameAr}</span>
-            </div>
-            <div className="text-slate-400">المنطقة: {hoveredStation.area}</div>
-            <div className="mt-1 text-[11px] text-amber-400">
-              انقر لتحديد هذه المحطة كنقطة نزول
-            </div>
-          </div>
-        )}
-
-        {/* Hover Popover: Live Bus Details */}
-        {hoveredTrip && (
-          <div className="absolute bottom-4 left-4 z-40 bg-slate-900/95 border border-emerald-600/50 p-3 rounded-xl shadow-xl max-w-xs text-xs pointer-events-none backdrop-blur-md">
-            <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
-              <Bus className="w-3.5 h-3.5" />
-              <span>{hoveredTrip.routeName}</span>
-            </div>
-            <div className="text-slate-300">السائق: {hoveredTrip.driverName}</div>
-            <div className="text-slate-400">الحافلة: {hoveredTrip.busModel} ({hoveredTrip.busPlate})</div>
-            <div className="text-slate-400">المقاعد المتبقية: {hoveredTrip.availableSeats} من {hoveredTrip.totalSeats}</div>
-            <div className="mt-1.5 text-emerald-300 font-semibold">رحلة جارية على الطريق الآن</div>
-          </div>
-        )}
-
-        {/* Hover Popover: Passenger Booking Details in Driver view */}
-        {hoveredBooking && (
-          <div className="absolute top-4 left-4 z-40 bg-slate-900/95 border border-amber-500/50 p-3 rounded-xl shadow-xl max-w-xs text-xs pointer-events-none backdrop-blur-md">
-            <div className="font-bold text-amber-400 mb-1 flex items-center gap-1.5">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>راكب: {hoveredBooking.passengerName}</span>
-            </div>
-            <div className="text-slate-300">المقعد رقم: {hoveredBooking.seatNumber}</div>
-            <div className="text-slate-300">محطة النزول: {hoveredBooking.dropoffStation}</div>
-            <div className="text-slate-400">الجوال: {hoveredBooking.passengerPhone}</div>
-            <div className="mt-1 font-bold text-sky-400">
-              الحالة: {hoveredBooking.status === 'boarded' ? 'صعد للحافلة ✓' : 'في انتظار الصعود'}
-            </div>
-          </div>
-        )}
-
-        {/* Custom Point Click Indicator Hint */}
+        {/* Interactive Click Hint */}
         {interactive && (
-          <div className="absolute top-3 right-3 bg-slate-950/80 border border-slate-800 text-slate-300 text-[11px] px-2.5 py-1 rounded-lg backdrop-blur-sm flex items-center gap-1.5 pointer-events-none">
-            <Crosshair className="w-3 h-3 text-sky-400" />
-            <span>يمكنك الضغط على أي محطة أو أي نقطة على الخريطة لتحديد النزول</span>
+          <div className="absolute top-3 right-3 z-[400] bg-slate-950/85 border border-slate-700 text-slate-200 text-[11px] px-3 py-1.5 rounded-xl backdrop-blur-md flex items-center gap-1.5 pointer-events-none shadow-lg">
+            <Crosshair className="w-3.5 h-3.5 text-sky-400" />
+            <span>خريطة حقيقية تفاعلية: انقر على أي محطة أو شارع لتحديد النزول</span>
           </div>
         )}
       </div>
 
       {/* Map Footer: Routes legend & pricing */}
-      <div className="p-3 bg-slate-950/90 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-        <div className="flex flex-wrap items-center gap-4 text-slate-300">
-          <span className="text-slate-500 font-medium">دليل المسارات والأسعار:</span>
+      <div className="p-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <div className="flex flex-wrap items-center gap-3.5 text-slate-300">
+          <span className="text-slate-500 font-bold">دليل مسارات حافلات الأحساء:</span>
           {routes.map(r => (
             <div key={`legend-${r.id}`} className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: r.color }} />
-              <span className="font-medium">{r.nameAr.split('(')[0]}</span>
-              <span className="text-amber-400 font-bold">{r.price} ر.س</span>
+              <span className="font-bold">{r.nameAr.split('(')[0]}</span>
+              <span className="text-amber-400 font-bold">({r.price} ر.س)</span>
             </div>
           ))}
         </div>
-        <div className="text-slate-400 text-[11px]">
+        <div className="text-slate-400 text-[11px] font-medium">
           * الحد الأقصى لسعر أي تذكرة حافلة في الأحساء 8 ريال
         </div>
       </div>
