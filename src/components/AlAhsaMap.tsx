@@ -182,12 +182,14 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   const activeTrips = trips.filter(t => t.status === 'in_progress');
   const trackedTrip = trips.find(t => t.id === trackedTripId) || activeTrips[0];
 
+  const [autoFollowDriver, setAutoFollowDriver] = useState<boolean>(true);
+
   // Initialize Real Leaflet Map
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    // CartoDB Dark Matter / Voyager or OpenStreetMap
-    const initialTileUrl = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+    // OpenStreetMap Standard Tiles (Shows authentic Arabic street and neighborhood names across Hofuf, Mubarraz, King Faisal Univ, etc.)
+    const initialTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const map = L.map(mapContainerRef.current, {
       center: AL_AHSA_CENTER,
@@ -198,7 +200,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
 
     const tile = L.tileLayer(initialTileUrl, {
       maxZoom: 19,
-      subdomains: 'abcd'
+      attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
     tileLayerRef.current = tile;
@@ -220,6 +222,11 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       });
     });
 
+    // Disable auto-follow if user manually drags or zooms map
+    map.on('dragstart', () => {
+      setAutoFollowDriver(false);
+    });
+
     mapRef.current = map;
 
     return () => {
@@ -235,11 +242,11 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
 
     const newUrl = mapTileStyle === 'satellite'
       ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
+      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const newTile = L.tileLayer(newUrl, {
       maxZoom: mapTileStyle === 'satellite' ? 18 : 19,
-      subdomains: 'abcd'
+      attribution: mapTileStyle === 'satellite' ? '&copy; Esri World Imagery' : '&copy; OpenStreetMap'
     }).addTo(mapRef.current);
 
     tileLayerRef.current = newTile;
@@ -383,22 +390,32 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       const tripRoute = routes.find(r => r.id === trackedTrip.routeId);
       const points: [number, number][] = [];
 
-      // Start from current bus location
-      if (trackedTrip.currentLocation) {
-        points.push([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng]);
-      }
-
-      // Add route stations
-      if (tripRoute && tripRoute.stations) {
+      // Add all stations of the route
+      if (tripRoute && tripRoute.stations && tripRoute.stations.length > 0) {
         tripRoute.stations.forEach(s => points.push([s.lat, s.lng]));
       }
 
+      // Add current bus location
+      if (trackedTrip.currentLocation) {
+        // Insert current location appropriately or connect
+        points.unshift([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng]);
+      }
+
       if (points.length >= 2) {
+        // Thick road underlay path
+        L.polyline(points, {
+          color: '#059669',
+          weight: 9,
+          opacity: 0.35,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(routeLayersRef.current!);
+
         activeRoutePolylineRef.current = L.polyline(points, {
           color: '#10b981',
           weight: 5,
-          opacity: 0.9,
-          dashArray: '8, 8',
+          opacity: 0.95,
+          dashArray: '10, 8',
           lineCap: 'round',
           lineJoin: 'round'
         }).addTo(mapRef.current);
@@ -407,6 +424,14 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
           `مسار السائق المباشر (${trackedTrip.driverName} - ${trackedTrip.busPlate})`,
           { permanent: false, direction: 'top', className: 'driver-path-tooltip font-bold text-xs' }
         );
+      }
+
+      // Auto follow driver if autoFollowDriver enabled
+      if (autoFollowDriver && trackedTrip.currentLocation && mapRef.current) {
+        mapRef.current.panTo([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng], {
+          animate: true,
+          duration: 1
+        });
       }
     }
 
@@ -459,10 +484,11 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
         busMarkersRef.current.delete(tripId);
       }
     });
-  }, [activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip]);
+  }, [activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip, autoFollowDriver]);
 
   // Auto-pan map smoothly to follow tracked bus
   const handleCenterOnBus = () => {
+    setAutoFollowDriver(true);
     if (!mapRef.current || !trackedTrip?.currentLocation) return;
     mapRef.current.flyTo(
       [trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng],
@@ -567,11 +593,15 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
             <button
               type="button"
               onClick={handleCenterOnBus}
-              className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs flex items-center gap-1.5 shadow-xl transition-all border border-amber-300"
-              title="تركيز الكاميرا على الحافلة المتتبعة"
+              className={`px-3 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-xl transition-all border ${
+                autoFollowDriver
+                  ? 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 border-emerald-300 ring-2 ring-emerald-400/50'
+                  : 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-300'
+              }`}
+              title="تفعيل التتبع التلقائي وتحريك الكاميرا مع السائق"
             >
               <Bus className="w-4 h-4" />
-              <span>متابعة موقع الحافلة 🎯</span>
+              <span>{autoFollowDriver ? 'التتبع التلقائي مفعل 📡' : 'متابعة موقع الحافلة 🎯'}</span>
             </button>
           )}
 

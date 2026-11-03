@@ -258,25 +258,33 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       }
     }
 
-    // Pulse interval for tracking driver along route and broadcasting GPS updates
-    let stepIndex = 0;
+    // Pulse interval for tracking driver along route and broadcasting real-time continuous GPS updates
+    let currentStationIndex = 0;
+    let progressRatio = 0.0;
+
     pulseInterval = setInterval(() => {
       if (activeTripId && currentTrip?.status === 'in_progress') {
         const tripRoute = routes.find(r => r.id === currentTrip.routeId);
         const stations = tripRoute?.stations || [];
 
-        // If real GPS has moved, use it; otherwise smoothly progress along route stations
         if (stations.length >= 2) {
-          stepIndex = (stepIndex + 1) % stations.length;
-          const currentTarget = stations[stepIndex];
-          const nextTarget = stations[(stepIndex + 1) % stations.length];
+          // Increment progress along segment smoothly (0.0 -> 0.2 -> 0.4 -> 0.6 -> 0.8 -> next station)
+          progressRatio += 0.2;
+          if (progressRatio >= 1.0) {
+            progressRatio = 0.0;
+            currentStationIndex = (currentStationIndex + 1) % (stations.length - 1);
+          }
 
-          // Small interpolation towards next station
-          const lat = Number((currentTarget.lat + (nextTarget.lat - currentTarget.lat) * 0.25).toFixed(6));
-          const lng = Number((currentTarget.lng + (nextTarget.lng - currentTarget.lng) * 0.25).toFixed(6));
-          const heading = Math.round(
-            ((Math.atan2(nextTarget.lng - currentTarget.lng, nextTarget.lat - currentTarget.lat) * 180) / Math.PI + 360) % 360
-          );
+          const fromStation = stations[currentStationIndex];
+          const toStation = stations[currentStationIndex + 1] || stations[0];
+
+          // Realistic linear interpolation between route stations
+          const lat = Number((fromStation.lat + (toStation.lat - fromStation.lat) * progressRatio).toFixed(6));
+          const lng = Number((fromStation.lng + (toStation.lng - fromStation.lng) * progressRatio).toFixed(6));
+          
+          const dLng = toStation.lng - fromStation.lng;
+          const dLat = toStation.lat - fromStation.lat;
+          const heading = Math.round(((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360);
 
           lastDeviceCoordsRef.current = { lat, lng, time: Date.now() };
           setDriverDeviceCoords({ lat, lng, accuracy: 5, speed: 0, heading });
@@ -311,7 +319,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
           );
         }
       }
-    }, 4000);
+    }, 2500);
 
     return () => {
       if (watchId !== null && 'geolocation' in navigator) navigator.geolocation.clearWatch(watchId);
