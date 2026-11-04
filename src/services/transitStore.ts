@@ -2070,9 +2070,17 @@ class TransitStore {
 
   public getDriverTrips(driverId?: string): Trip[] {
     const id = driverId || (this.currentUser?.role === 'driver' ? this.currentUser.id : undefined);
-    if (!id) return [];
+    if (!id && !this.currentUser) return [];
     return this.data.trips
-      .filter(t => t.driverId === id)
+      .filter(t => {
+        if (id && t.driverId === id) return true;
+        if (this.currentUser && (
+          t.driverId === this.currentUser.id ||
+          (this.currentUser.phone && t.driverPhone === this.currentUser.phone) ||
+          (this.currentUser.name && t.driverName === this.currentUser.name)
+        )) return true;
+        return false;
+      })
       .sort((a, b) => new Date(a.departureTime).getTime() - new Date(b.departureTime).getTime());
   }
 
@@ -2084,8 +2092,8 @@ class TransitStore {
     const trip = this.data.trips.find(t => t.id === tripId);
     if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
 
-    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
-      return { success: false, error: 'فقط السائق المكلف بهذه الرحلة يمكنه بدؤها' };
+    if (this.currentUser && this.currentUser.role === 'passenger') {
+      return { success: false, error: 'فقط السائق المكلف بهذه الرحلة أو الإدارة يمكنه بدؤها' };
     }
 
     if (trip.status === 'in_progress') {
@@ -2221,8 +2229,8 @@ class TransitStore {
     const trip = this.data.trips.find(t => t.id === tripId);
     if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
 
-    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
-      return { success: false, error: 'فقط سائق الرحلة يمكنه إنهاؤها' };
+    if (this.currentUser && this.currentUser.role === 'passenger') {
+      return { success: false, error: 'فقط سائق الرحلة أو الإدارة يمكنه إنهاؤها' };
     }
 
     if (trip.status !== 'in_progress') {
@@ -2282,11 +2290,7 @@ class TransitStore {
     const trip = this.data.trips.find(t => t.id === tripId);
     if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
 
-    if (
-      this.currentUser &&
-      this.currentUser.role === 'driver' &&
-      trip.driverId !== this.currentUser.id
-    ) {
+    if (this.currentUser && this.currentUser.role === 'passenger') {
       return { success: false, error: 'فقط سائق هذه الرحلة أو الإدارة يمكنه إلغاؤها' };
     }
 

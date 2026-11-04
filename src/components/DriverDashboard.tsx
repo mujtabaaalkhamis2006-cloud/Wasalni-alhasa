@@ -149,11 +149,12 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     const lng = Number(rawCoords.lng.toFixed(6));
     const now = Date.now();
 
-    // Throttle updates: if less than 1200ms and movement < 4 meters, skip re-render
-    if (lastDeviceCoordsRef.current && now - lastProcessTimeRef.current < 1200) {
+    // Strictly ensure the tracking marker DOES NOT move unless the driver's phone physically moves (> 3.5m)
+    if (lastDeviceCoordsRef.current) {
       const dLat = Math.abs(lat - lastDeviceCoordsRef.current.lat);
       const dLng = Math.abs(lng - lastDeviceCoordsRef.current.lng);
-      if (dLat < 0.00004 && dLng < 0.00004) {
+      // If position has not physically moved beyond sensor noise, do NOT update or broadcast
+      if (dLat < 0.000035 && dLng < 0.000035) {
         return;
       }
     }
@@ -211,26 +212,30 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       errorMessage: undefined
     }));
 
-    // Broadcast live telemetry to server so passengers and admin see it immediately
+    // Broadcast live telemetry ONLY when real physical displacement occurs
     if (activeTripId) {
       transitStore.broadcastDriverGps(activeTripId, lat, lng, speedKmh, heading, accuracy, currentUser.id);
     }
   };
 
-  // Continuous physical device GPS acquisition for driver
+  // Continuous physical device GPS acquisition for driver - driven strictly by hardware sensor
   useEffect(() => {
     let watchId: number | null = null;
-    let pulseInterval: any = null;
 
     const acquireInitial = async () => {
       setIsAcquiringGps(true);
       try {
-        const loc = await requestUserLocation();
-        processAndBroadcastPosition({
+        const loc = await requestUserLocation(true);
+        lastDeviceCoordsRef.current = { lat: loc.lat, lng: loc.lng, time: Date.now() };
+        setDriverDeviceCoords({ lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy || 5, speed: 0, heading: 0 });
+        setGpsTelemetry(prev => ({
+          ...prev,
           lat: loc.lat,
           lng: loc.lng,
-          accuracy: loc.accuracy
-        });
+          accuracy: loc.accuracy || 5,
+          isRealSensor: true,
+          errorMessage: undefined
+        }));
       } catch (err: any) {
         console.warn('Initial GPS acquisition:', err);
       } finally {
@@ -255,35 +260,17 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
           (err) => {
             console.warn('GPS watch error:', err.message);
           },
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 3000 }
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
         );
       } catch (e) {
         console.warn('Could not start GPS watch:', e);
       }
     }
 
-    // Periodic telemetry heartbeat: broadcasts ONLY the driver's authentic physical device GPS coordinates
-    pulseInterval = setInterval(() => {
-      if (activeTripId && currentTrip?.status === 'in_progress') {
-        if (lastDeviceCoordsRef.current) {
-          transitStore.broadcastDriverGps(
-            activeTripId,
-            lastDeviceCoordsRef.current.lat,
-            lastDeviceCoordsRef.current.lng,
-            0,
-            gpsTelemetry.heading,
-            gpsTelemetry.accuracy,
-            currentUser.id
-          );
-        }
-      }
-    }, 3000);
-
     return () => {
       if (watchId !== null && 'geolocation' in navigator) navigator.geolocation.clearWatch(watchId);
-      if (pulseInterval) clearInterval(pulseInterval);
     };
-  }, [activeTripId, currentTrip?.status, routes, currentTrip?.routeId]);
+  }, [activeTripId, currentTrip?.status]);
 
   // Requirement: Start trip from driver's actual physical device location!
   const handleStartTrip = async () => {
@@ -434,9 +421,45 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         const res = transitStore.cancelTrip(idToCancel);
         if (res.success) {
           setFeedback({ type: 'success', msg: `تم إلغاء ${nameToDisplay} وجميع حجوزاتها المرتبطة بنجاح ✓` });
+
+          // Reset active selection if the cancelled trip was the currently displayed one
+          const allTrips = transitStore.getDriverTrips(currentUser.id);
+          const nextInProg = allTrips.find(t => t.id !== idToCancel && t.status === 'in_progress');
+          const nextScheduled = allTrips.find(t => t.id !== idToCancel && t.status === 'scheduled');
+          if (nextInProg) {
+            setActiveTripId(nextInProg.id);
+          } else if (nextScheduled) {
+            setActiveTripId(nextScheduled.id);
+          } else {
+            setActiveTripId(null);
+          }
+          setGpsTelemetry(prev => ({ ...prev, active: false }));
           refreshData();
         } else {
           setFeedback({ type: 'error', msg: res.error || 'تعذر إلغاء الرحلة' });
+        }
+      }
+    });
+  };
+
+  // Permanently delete a cancelled or completed trip from driver records
+  const handleDeleteTrip = (tripId: string, routeName?: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'حذف الرحلة نهائياً',
+      message: `هل أنت متأكد من حذف ${routeName || 'هذه الرحلة'} نهائياً من سجل رحلاتك؟`,
+      confirmLabel: 'تأكيد الحذف النهائي',
+      type: 'danger',
+      onConfirm: async () => {
+        const res = await transitStore.deleteTrip(tripId);
+        if (res.success) {
+          setFeedback({ type: 'success', msg: 'تم حذف الرحلة نهائياً من سجلك بنجاح ✓' });
+          if (activeTripId === tripId) {
+            setActiveTripId(null);
+          }
+          refreshData();
+        } else {
+          setFeedback({ type: 'error', msg: res.error || 'تعذر حذف الرحلة' });
         }
       }
     });
@@ -1023,13 +1046,20 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                 </button>
               )}
 
-              {currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled' && (
+              {currentTrip.status !== 'completed' && currentTrip.status !== 'cancelled' ? (
                 <button
                   onClick={() => handleCancelTrip()}
                   className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-rose-600/30 transition-all"
                 >
                   <XCircle className="w-4 h-4" />
                   <span>إلغاء الرحلة ✕</span>
+                </button>
+              ) : (
+                <button
+                  onClick={() => handleDeleteTrip(currentTrip.id, currentTrip.routeName)}
+                  className="px-4 py-2.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-700 text-rose-200 font-bold text-xs flex items-center gap-1.5 shadow-md transition-all"
+                >
+                  <span>حذف هذه الرحلة من السجل 🗑️</span>
                 </button>
               )}
             </div>
@@ -1348,12 +1378,19 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                         >
                           عرض في اللوحة
                         </button>
-                        {t.status !== 'completed' && t.status !== 'cancelled' && (
+                        {t.status !== 'completed' && t.status !== 'cancelled' ? (
                           <button
                             onClick={() => handleCancelTrip(t.id, t.routeName)}
                             className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 font-bold text-[11px]"
                           >
                             إلغاء الرحلة
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => handleDeleteTrip(t.id, t.routeName)}
+                            className="px-2.5 py-1 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-800/60 text-red-300 font-bold text-[11px]"
+                          >
+                            حذف نهائي 🗑️
                           </button>
                         )}
                       </div>

@@ -178,6 +178,8 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   const [filterRouteId, setFilterRouteId] = useState<string>(activeRouteId || 'all');
   const [mapTileStyle, setMapTileStyle] = useState<'streets' | 'satellite'>('streets');
   const tileLayerRef = useRef<L.TileLayer | null>(null);
+  const lastPannedCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastBusMarkerCoordsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
 
   const displayedRoutes = routes.filter(r => filterRouteId === 'all' || r.id === filterRouteId);
   const activeTrips = trips.filter(t => t.status === 'in_progress');
@@ -189,8 +191,8 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
 
-    // OpenStreetMap Standard Tiles (Shows authentic Arabic street and neighborhood names across Hofuf, Mubarraz, King Faisal Univ, etc.)
-    const initialTileUrl = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+    // OpenStreetMap Standard High-Performance CDN Tiles with Arabic places (Hofuf, Mubarraz, Al-Qarah, etc.)
+    const initialTileUrl = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const map = L.map(mapContainerRef.current, {
       center: AL_AHSA_CENTER,
@@ -201,6 +203,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
 
     const tile = L.tileLayer(initialTileUrl, {
       maxZoom: 19,
+      subdomains: ['a', 'b', 'c'],
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
@@ -243,10 +246,11 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
 
     const newUrl = mapTileStyle === 'satellite'
       ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
-      : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
 
     const newTile = L.tileLayer(newUrl, {
       maxZoom: mapTileStyle === 'satellite' ? 18 : 19,
+      subdomains: mapTileStyle === 'satellite' ? [] : ['a', 'b', 'c'],
       attribution: mapTileStyle === 'satellite' ? '&copy; Esri World Imagery' : '&copy; OpenStreetMap'
     }).addTo(mapRef.current);
 
@@ -430,21 +434,34 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
         );
       }
 
-      // Auto follow driver if autoFollowDriver enabled
+      // Auto follow driver if autoFollowDriver enabled - ONLY pan when physical displacement exceeds threshold
       if (autoFollowDriver && trackedTrip.currentLocation && mapRef.current) {
-        mapRef.current.panTo([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng], {
-          animate: true,
-          duration: 1
-        });
+        const curLat = trackedTrip.currentLocation.lat;
+        const curLng = trackedTrip.currentLocation.lng;
+        const last = lastPannedCoordsRef.current;
+        const dist = last ? Math.hypot(curLat - last.lat, curLng - last.lng) : 999;
+        // Only pan if it's the first time or if the physical location changed by more than ~3.5 meters (0.000035 deg)
+        if (!last || dist > 0.000035) {
+          lastPannedCoordsRef.current = { lat: curLat, lng: curLng };
+          mapRef.current.panTo([curLat, curLng], {
+            animate: true,
+            duration: 0.8
+          });
+        }
       }
     }
 
-    // 2. Update Live Bus Markers with smooth motion
+    // 2. Update Live Bus Markers with smooth motion ONLY upon real physical GPS displacement
     const existingKeys = new Set(busMarkersRef.current.keys());
 
     activeTrips.forEach(trip => {
-      const lat = trip.currentLocation?.lat || 25.38;
-      const lng = trip.currentLocation?.lng || 49.58;
+      // Strictly do not render arbitrary fallback coordinates if trip has no physical GPS location yet
+      if (!trip.currentLocation || typeof trip.currentLocation.lat !== 'number' || typeof trip.currentLocation.lng !== 'number') {
+        return;
+      }
+
+      const lat = trip.currentLocation.lat;
+      const lng = trip.currentLocation.lng;
       const isTracked = trackedTripId === trip.id;
 
       let marker = busMarkersRef.current.get(trip.id);
@@ -470,9 +487,15 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
         `);
 
         busMarkersRef.current.set(trip.id, marker);
+        lastBusMarkerCoordsRef.current.set(trip.id, { lat, lng });
       } else {
-        // Smoothly animate marker to new GPS coordinate
-        marker.setLatLng([lat, lng]);
+        const lastPos = lastBusMarkerCoordsRef.current.get(trip.id);
+        const dist = lastPos ? Math.hypot(lat - lastPos.lat, lng - lastPos.lng) : 999;
+        // Strictly do not move or animate marker if driver is stationary
+        if (!lastPos || dist > 0.000035) {
+          marker.setLatLng([lat, lng]);
+          lastBusMarkerCoordsRef.current.set(trip.id, { lat, lng });
+        }
         marker.setIcon(createBusIcon(trip, isTracked));
         marker.setZIndexOffset(isTracked ? 1000 : 600);
       }
@@ -487,6 +510,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
         m.remove();
         busMarkersRef.current.delete(tripId);
       }
+      lastBusMarkerCoordsRef.current.delete(tripId);
     });
   }, [activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip, autoFollowDriver]);
 
