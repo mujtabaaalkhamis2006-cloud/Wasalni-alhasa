@@ -86,6 +86,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     heading?: number;
   } | null>(null);
   const [isAcquiringGps, setIsAcquiringGps] = useState(false);
+  const [isWalkingDevice, setIsWalkingDevice] = useState(false);
   const lastDeviceCoordsRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
 
   // Refresh driver trips and passengers
@@ -138,23 +139,25 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
   const lastProcessTimeRef = useRef<number>(0);
 
   // Helper to process and broadcast real device GPS coordinates
-  const processAndBroadcastPosition = (rawCoords: {
-    lat: number;
-    lng: number;
-    speed?: number | null;
-    heading?: number | null;
-    accuracy?: number | null;
-  }) => {
+  const processAndBroadcastPosition = (
+    rawCoords: {
+      lat: number;
+      lng: number;
+      speed?: number | null;
+      heading?: number | null;
+      accuracy?: number | null;
+    },
+    force = false
+  ) => {
     const lat = Number(rawCoords.lat.toFixed(6));
     const lng = Number(rawCoords.lng.toFixed(6));
     const now = Date.now();
 
-    // Strictly ensure the tracking marker DOES NOT move unless the driver's phone physically moves (> 3.5m)
-    if (lastDeviceCoordsRef.current) {
+    // Check sensor displacement: allow walking (~0.8m) while suppressing sensor noise if completely still
+    if (!force && lastDeviceCoordsRef.current) {
       const dLat = Math.abs(lat - lastDeviceCoordsRef.current.lat);
       const dLng = Math.abs(lng - lastDeviceCoordsRef.current.lng);
-      // If position has not physically moved beyond sensor noise, do NOT update or broadcast
-      if (dLat < 0.000035 && dLng < 0.000035) {
+      if (dLat < 0.000008 && dLng < 0.000008) {
         return;
       }
     }
@@ -175,19 +178,19 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       const distKm = 6371 * c;
       const hours = (now - lastDeviceCoordsRef.current.time) / 3600000;
-      if (hours > 0.0005 && distKm > 0.003) {
+      if (hours > 0.0002 && distKm > 0.001) {
         const calculatedSpeed = Math.round(distKm / hours);
-        if (calculatedSpeed < 130) speedKmh = calculatedSpeed;
+        if (calculatedSpeed < 120) speedKmh = calculatedSpeed;
       }
     }
 
     let heading = 0;
-    if (typeof rawCoords.heading === 'number' && !isNaN(rawCoords.heading) && rawCoords.heading > 0) {
+    if (typeof rawCoords.heading === 'number' && !isNaN(rawCoords.heading) && rawCoords.heading >= 0) {
       heading = Math.round(rawCoords.heading);
     } else if (lastDeviceCoordsRef.current) {
       const dLat = lat - lastDeviceCoordsRef.current.lat;
       const dLng = lng - lastDeviceCoordsRef.current.lng;
-      if (Math.hypot(dLat, dLng) > 0.00005) {
+      if (Math.hypot(dLat, dLng) > 0.00002) {
         const rad = Math.atan2(dLng, dLat);
         heading = Math.round(((rad * 180) / Math.PI + 360) % 360);
       } else {
@@ -212,9 +215,87 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       errorMessage: undefined
     }));
 
-    // Broadcast live telemetry ONLY when real physical displacement occurs
+    // Broadcast live telemetry
     if (activeTripId) {
       transitStore.broadcastDriverGps(activeTripId, lat, lng, speedKmh, heading, accuracy, currentUser.id);
+    }
+  };
+
+  // Walking Engine ("مشي الجهاز"): Step device forward along the route towards destination
+  const handleStepDeviceForward = () => {
+    if (!currentTrip) return;
+    const currentLoc = driverDeviceCoords || currentTrip.currentLocation;
+    const tripRoute = routes.find(r => r.id === currentTrip.routeId);
+    const stations = tripRoute?.stations || [];
+    if (!currentLoc || stations.length === 0) return;
+
+    // Find the next target station ahead on the route
+    let targetStation = stations[stations.length - 1];
+    for (const st of stations) {
+      const dist = Math.hypot(st.lat - currentLoc.lat, st.lng - currentLoc.lng);
+      if (dist > 0.0008) { // station is still ahead
+        targetStation = st;
+        break;
+      }
+    }
+
+    const dLat = targetStation.lat - currentLoc.lat;
+    const dLng = targetStation.lng - currentLoc.lng;
+    const totalDist = Math.hypot(dLat, dLng);
+
+    const stepDist = 0.00045; // ~50 meters forward step
+    let nextLat = currentLoc.lat;
+    let nextLng = currentLoc.lng;
+
+    if (totalDist > 0.0001) {
+      const frac = Math.min(1, stepDist / totalDist);
+      nextLat = currentLoc.lat + dLat * frac;
+      nextLng = currentLoc.lng + dLng * frac;
+    } else {
+      nextLat = currentLoc.lat + 0.00015;
+      nextLng = currentLoc.lng + 0.00015;
+    }
+
+    const rad = Math.atan2(dLng, dLat);
+    const heading = Math.round(((rad * 180) / Math.PI + 360) % 360);
+
+    processAndBroadcastPosition(
+      {
+        lat: Number(nextLat.toFixed(6)),
+        lng: Number(nextLng.toFixed(6)),
+        heading,
+        speed: 36,
+        accuracy: 4
+      },
+      true
+    );
+  };
+
+  // Automated Walking Engine: advances device every 2 seconds when toggled on
+  useEffect(() => {
+    if (!isWalkingDevice || !currentTrip || currentTrip.status !== 'in_progress') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      handleStepDeviceForward();
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isWalkingDevice, currentTrip?.id, currentTrip?.status, driverDeviceCoords, routes]);
+
+  const handleResetToRealGps = async () => {
+    setIsWalkingDevice(false);
+    setIsAcquiringGps(true);
+    try {
+      const loc = await requestUserLocation(true);
+      processAndBroadcastPosition(loc, true);
+      setFeedback({ type: 'success', msg: 'تم القفل على موقع مستشعر الـ GPS الفعلي للجهاز بنجاح ✓' });
+      setTimeout(() => setFeedback(null), 3000);
+    } catch (e: any) {
+      setFeedback({ type: 'error', msg: 'تعذر التقاط إشارة GPS: ' + (e?.message || '') });
+    } finally {
+      setIsAcquiringGps(false);
     }
   };
 
@@ -288,7 +369,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         speed: 0,
         heading: 0
       };
-      processAndBroadcastPosition(startCoords);
+      processAndBroadcastPosition(startCoords, true);
     } catch (e) {
       console.warn('Could not get fresh device GPS for trip start:', e);
     } finally {
@@ -323,12 +404,12 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
   const handleManualBroadcastGps = async () => {
     setIsAcquiringGps(true);
     try {
-      const pos = await requestUserLocation();
+      const pos = await requestUserLocation(true);
       processAndBroadcastPosition({
         lat: pos.lat,
         lng: pos.lng,
         accuracy: pos.accuracy
-      });
+      }, true);
       if (activeTripId) {
         transitStore.broadcastDriverGps(
           activeTripId,
@@ -382,6 +463,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
             type: 'success',
             msg: `تم إنهاء الرحلة بنجاح! صعد (${res.boardedCount || 0}) راكب، وسُجّل (${res.noShowCount || 0}) كـ No-Show.`
           });
+          setIsWalkingDevice(false);
           setGpsTelemetry(prev => ({ ...prev, active: false }));
 
           // Automatically switch to another active or scheduled trip, or reset active selection
@@ -433,6 +515,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
           } else {
             setActiveTripId(null);
           }
+          setIsWalkingDevice(false);
           setGpsTelemetry(prev => ({ ...prev, active: false }));
           refreshData();
         } else {
@@ -1169,6 +1252,64 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                   <div className="text-[10px] text-emerald-400 mt-1">
                     {gpsTelemetry.lastBroadcast ? `آخر بث: ${gpsTelemetry.lastBroadcast.toLocaleTimeString('ar-SA')}` : 'جاري البث...'}
                   </div>
+                </div>
+              </div>
+
+              {/* Walking Engine: تمشية الجهاز على مسار الرحلة الحقيقي */}
+              <div className="p-4 rounded-2xl bg-slate-950/90 border-2 border-emerald-500/60 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+                <div className="flex items-center gap-3">
+                  <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-lg transition-transform ${
+                    isWalkingDevice
+                      ? 'bg-emerald-500 text-slate-950 shadow-lg shadow-emerald-500/40 animate-pulse scale-105'
+                      : 'bg-slate-800 text-slate-300 border border-slate-700'
+                  }`}>
+                    🚶‍♂️
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2.5 h-2.5 rounded-full ${isWalkingDevice ? 'bg-emerald-400 animate-ping' : 'bg-slate-600'}`} />
+                      <span className="font-black text-white text-sm">
+                        {isWalkingDevice ? 'تمشية الجهاز نشطة: الحافلة تتحرك بالمسار الواقعي الآن 🟢' : 'تمشية الجهاز وحركة الحافلة الحية 🚶‍♂️'}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {isWalkingDevice
+                        ? 'يتم تحريك إحداثيات الجهاز تلقائياً بالشارع وبثها حياً لكافة الركاب والإدارة بالخريطة'
+                        : 'انقر على "ابدأ تمشية الجهاز" لتحريك موقع الحافلة خطوة بخطوة بالخريطة، أو امشِ بجوالك فعلياً'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsWalkingDevice(prev => !prev)}
+                    className={`px-4 py-2 rounded-xl text-xs font-black flex items-center gap-2 transition-all shadow-lg ${
+                      isWalkingDevice
+                        ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 ring-2 ring-amber-300'
+                        : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/30'
+                    }`}
+                  >
+                    <span>{isWalkingDevice ? '⏸️ إيقاف التمشية المؤقت' : '▶️ ابدأ تمشية الجهاز على المسار'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleStepDeviceForward}
+                    className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 font-bold text-xs flex items-center gap-1.5 border border-slate-700 shadow"
+                    title="تحريك الجهاز 50 متراً للأمام على المسار"
+                  >
+                    <span>⏭️ خطوة للأمام (+50م)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleResetToRealGps}
+                    className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-bold text-xs flex items-center gap-1 border border-slate-700"
+                    title="الرجوع لحساس الـ GPS الفعلي للجهاز فقط"
+                  >
+                    <span>📍 قفل على GPS الفعلي</span>
+                  </button>
                 </div>
               </div>
 

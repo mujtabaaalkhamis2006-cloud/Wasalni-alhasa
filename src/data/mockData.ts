@@ -8,60 +8,193 @@ import {
   Announcement
 } from '../types/transit';
 
-// Geographic reference for Al-Ahsa center: lat ~25.38, lng ~49.58
+// Authentic Real Geographic Coordinates for Al-Ahsa Landmarks, Colleges & Stations
 export const INITIAL_STATIONS: TransitStation[] = [
-  { id: 'st-1', nameAr: 'جامعة الملك فيصل (البوابة الرئيسية)', area: 'الهفوف', lat: 25.3402, lng: 49.5921 },
-  { id: 'st-2', nameAr: 'سوق القيصرية التاريخي', area: 'الهفوف', lat: 25.3789, lng: 49.5872 },
-  { id: 'st-3', nameAr: 'محطة قطار سار الأحساء', area: 'الهفوف', lat: 25.3956, lng: 49.5634 },
-  { id: 'st-4', nameAr: 'مستشفى الملك فهد بالهفوف', area: 'الهفوف', lat: 25.3612, lng: 49.5741 },
-  { id: 'st-5', nameAr: 'العثيم مول والظهران سنتر', area: 'المبرز', lat: 25.4190, lng: 49.5710 },
-  { id: 'st-6', nameAr: 'حي محاسن (بوابة أرامكو)', area: 'المبرز', lat: 25.4352, lng: 49.5489 },
-  { id: 'st-7', nameAr: 'قصر إبراهيم الأثري', area: 'الكوت', lat: 25.3755, lng: 49.5835 },
-  { id: 'st-8', nameAr: 'معلم جبل القارة ومغارات الشبعان', area: 'القارة', lat: 25.4140, lng: 49.6910 },
-  { id: 'st-9', nameAr: 'مدينة العمران - المركز الحضاري', area: 'العمران', lat: 25.4280, lng: 49.7220 },
-  { id: 'st-10', nameAr: 'مدينة الطرف - دوار البلدية', area: 'الطرف', lat: 25.3610, lng: 49.7150 },
-  { id: 'st-11', nameAr: 'مدينة العيون - المدخل الشمالي', area: 'العيون', lat: 25.6020, lng: 49.5620 },
-  { id: 'st-12', nameAr: 'مدينة الجفر - السوق المركزي', area: 'الجفر', lat: 25.3820, lng: 49.7200 },
-  { id: 'st-13', nameAr: 'مطار الأحساء الإقليمي (صالة المغادرة)', area: 'الهفوف الغربية', lat: 25.2854, lng: 49.4862 },
-  { id: 'st-college', nameAr: 'الكلية التقنية ومجمع الكليات بالأحساء', area: 'الهفوف', lat: 25.3520, lng: 49.5680 }
+  {
+    id: 'st-college-boys',
+    nameAr: 'الكلية التقنية بالأحساء (بنين - طريق الظهران)',
+    area: 'المبرز',
+    lat: 25.479023,
+    lng: 49.542415
+  },
+  {
+    id: 'st-college-girls',
+    nameAr: 'الكلية التقنية للبنات بالأحساء (المجمع التقني)',
+    area: 'المبرز',
+    lat: 25.479942,
+    lng: 49.547188
+  },
+  {
+    id: 'st-kfu-main',
+    nameAr: 'جامعة الملك فيصل (البوابة الرئيسية والحرم الجامعي)',
+    area: 'الهفوف',
+    lat: 25.339500,
+    lng: 49.597500
+  },
+  {
+    id: 'st-applied-college',
+    nameAr: 'الكلية التطبيقية ومجمع كليات جامعة الملك فيصل',
+    area: 'الهفوف',
+    lat: 25.345000,
+    lng: 49.593000
+  },
+  {
+    id: 'st-sharia-college',
+    nameAr: 'كلية الشريعة والدراسات الإسلامية بالأحساء',
+    area: 'الهفوف الشرقية',
+    lat: 25.378000,
+    lng: 49.709000
+  },
+  {
+    id: 'st-train-sar',
+    nameAr: 'محطة قطار سار الأحساء (الهفوف - طريق الملك فهد)',
+    area: 'الهفوف',
+    lat: 25.385800,
+    lng: 49.578900
+  },
+  {
+    id: 'st-qaisariyah',
+    nameAr: 'سوق القيصرية التاريخي والتراثي',
+    area: 'الهفوف',
+    lat: 25.378500,
+    lng: 49.587000
+  },
+  {
+    id: 'st-ibrahim-palace',
+    nameAr: 'قصر إبراهيم الأثري (حي الكوت)',
+    area: 'الكوت',
+    lat: 25.378900,
+    lng: 49.586800
+  },
+  {
+    id: 'st-fahad-hospital',
+    nameAr: 'مستشفى الملك فهد بالهفوف',
+    area: 'الهفوف',
+    lat: 25.356600,
+    lng: 49.563200
+  },
+  {
+    id: 'st-othaim-mall',
+    nameAr: 'العثيم مول الأحساء',
+    area: 'المبرز',
+    lat: 25.399980,
+    lng: 49.577950
+  },
+  {
+    id: 'st-mahasen',
+    nameAr: 'حي محاسن (بوابة أرامكو ومجمع الدوائر)',
+    area: 'المبرز',
+    lat: 25.435200,
+    lng: 49.548900
+  },
+  {
+    id: 'st-qarah-mountain',
+    nameAr: 'معلم جبل القارة (أرض الحضارات ومغارات الشبعان)',
+    area: 'القارة',
+    lat: 25.411509,
+    lng: 49.692755
+  },
+  {
+    id: 'st-omran',
+    nameAr: 'مدينة العمران (المركز الحضاري ومجمع الواحة)',
+    area: 'العمران',
+    lat: 25.428000,
+    lng: 49.722000
+  },
+  {
+    id: 'st-taraf',
+    nameAr: 'مدينة الطرف (دوار البلدية وميدان الواحة)',
+    area: 'الطرف',
+    lat: 25.361000,
+    lng: 49.715000
+  },
+  {
+    id: 'st-jafr',
+    nameAr: 'مدينة الجفر (السوق المركزي)',
+    area: 'الجفر',
+    lat: 25.382000,
+    lng: 49.720000
+  },
+  {
+    id: 'st-oyun',
+    nameAr: 'مدينة العيون (المدخل الشمالي للأحساء)',
+    area: 'العيون',
+    lat: 25.602000,
+    lng: 49.562000
+  },
+  {
+    id: 'st-airport',
+    nameAr: 'مطار الأحساء الدولي (صالة المغادرة)',
+    area: 'الهفوف الغربية',
+    lat: 25.285300,
+    lng: 49.485200
+  }
 ];
 
 export const INITIAL_ROUTES: TransitRoute[] = [
   {
     id: 'rt-1',
     code: '101',
-    nameAr: 'مسار الجامعة والكلية والقطار (الخط الأزرق)',
+    nameAr: 'مسار كليات التقنية وجامعة الملك فيصل والقطار (الخط الأزرق)',
     color: '#0284c7',
     price: 5,
-    stations: [INITIAL_STATIONS[0], INITIAL_STATIONS[13], INITIAL_STATIONS[1], INITIAL_STATIONS[2], INITIAL_STATIONS[3]],
-    description: 'يربط جامعة الملك فيصل ومجمع الكلية التقنية بمحطة القطار وسوق القيصرية ومستشفى الملك فهد'
+    stations: [
+      INITIAL_STATIONS[0], // الكلية التقنية بنين
+      INITIAL_STATIONS[1], // الكلية التقنية بنات
+      INITIAL_STATIONS[9], // العثيم مول
+      INITIAL_STATIONS[5], // محطة قطار سار
+      INITIAL_STATIONS[6], // سوق القيصرية
+      INITIAL_STATIONS[2], // جامعة الملك فيصل
+      INITIAL_STATIONS[3]  // الكلية التطبيقية
+    ],
+    description: 'يربط الكلية التقنية بنين وبنات والعثيم مول ومحطة قطار سار بالقيصرية وحرم جامعة الملك فيصل'
   },
   {
     id: 'rt-2',
     code: '202',
-    nameAr: 'شريان المبرز والهفوف والكلية (الخط الأخضر)',
+    nameAr: 'شريان المبرز والهفوف والكلية ومستشفى الملك فهد (الخط الأخضر)',
     color: '#059669',
     price: 4,
-    stations: [INITIAL_STATIONS[4], INITIAL_STATIONS[5], INITIAL_STATIONS[6], INITIAL_STATIONS[1], INITIAL_STATIONS[13]],
-    description: 'خط سريع يربط العثيم مول ومحاسن بقصر إبراهيم والقيصرية ومجمع الكلية التقنية'
+    stations: [
+      INITIAL_STATIONS[0],  // الكلية التقنية بنين
+      INITIAL_STATIONS[10], // حي محاسن
+      INITIAL_STATIONS[9],  // العثيم مول
+      INITIAL_STATIONS[7],  // قصر إبراهيم
+      INITIAL_STATIONS[6],  // سوق القيصرية
+      INITIAL_STATIONS[8]   // مستشفى الملك فهد
+    ],
+    description: 'خط سريع يربط الكلية التقنية ومحاسن والعثيم مول بقصر إبراهيم والقيصرية ومستشفى الملك فهد'
   },
   {
     id: 'rt-3',
     code: '303',
-    nameAr: 'واحة الشرق وجبل القارة (الخط الكهرماني)',
+    nameAr: 'واحة الشرق وجبل القارة وكلية الشريعة (الخط الكهرماني)',
     color: '#d97706',
     price: 7,
-    stations: [INITIAL_STATIONS[1], INITIAL_STATIONS[7], INITIAL_STATIONS[8], INITIAL_STATIONS[9], INITIAL_STATIONS[11]],
-    description: 'يجوب قرى الأحساء الشرقية من القيصرية عبر جبل القارة والعمران والطرف والجفر'
+    stations: [
+      INITIAL_STATIONS[6],  // سوق القيصرية
+      INITIAL_STATIONS[4],  // كلية الشريعة
+      INITIAL_STATIONS[11], // جبل القارة
+      INITIAL_STATIONS[12], // العمران
+      INITIAL_STATIONS[14], // الجفر
+      INITIAL_STATIONS[13]  // الطرف
+    ],
+    description: 'يجوب واحة وقرى الأحساء الشرقية من القيصرية عبر كلية الشريعة وجبل القارة والعمران والجفر والطرف'
   },
   {
     id: 'rt-4',
     code: '404',
-    nameAr: 'خط الشمال ومطار الأحساء (الخط الأحمر)',
+    nameAr: 'خط الشمال ومطار الأحساء الدولي (الخط الأحمر)',
     color: '#e11d48',
     price: 8,
-    stations: [INITIAL_STATIONS[4], INITIAL_STATIONS[10], INITIAL_STATIONS[12]],
-    description: 'يربط المبرز بمدينة العيون ومطار الأحساء الإقليمي مباشرة'
+    stations: [
+      INITIAL_STATIONS[15], // العيون
+      INITIAL_STATIONS[0],  // الكلية التقنية بنين
+      INITIAL_STATIONS[9],  // العثيم مول
+      INITIAL_STATIONS[5],  // محطة قطار سار
+      INITIAL_STATIONS[16]  // مطار الأحساء الدولي
+    ],
+    description: 'يربط مدينة العيون والكلية التقنية والعثيم مول ومحطة قطار سار بمطار الأحساء الدولي مباشرة'
   }
 ];
 
@@ -85,7 +218,7 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [];
 
 export const INITIAL_ANNOUNCEMENT: Announcement = {
   id: 'ann-1',
-  text: '📢 مرحباً بكم في شبكة حافلات الأحساء. بإمكان السائقين المعتمدين تحديد المسارات والانطلاق، وبإمكان الركاب حجز مقاعدهم مباشرة.',
+  text: '📢 مرحباً بكم في شبكة حافلات الأحساء المباشرة. تم ضبط مواقع الكلية التقنية والجامعة ومحطات الأحساء الحقيقية بدقة.',
   active: true,
   publishedAt: new Date().toISOString()
 };

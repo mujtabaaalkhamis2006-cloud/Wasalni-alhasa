@@ -440,8 +440,8 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
         const curLng = trackedTrip.currentLocation.lng;
         const last = lastPannedCoordsRef.current;
         const dist = last ? Math.hypot(curLat - last.lat, curLng - last.lng) : 999;
-        // Only pan if it's the first time or if the physical location changed by more than ~3.5 meters (0.000035 deg)
-        if (!last || dist > 0.000035) {
+        // Pan camera smoothly when physical location updates (displacement > ~0.8m)
+        if (!last || dist > 0.000008) {
           lastPannedCoordsRef.current = { lat: curLat, lng: curLng };
           mapRef.current.panTo([curLat, curLng], {
             animate: true,
@@ -491,8 +491,8 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       } else {
         const lastPos = lastBusMarkerCoordsRef.current.get(trip.id);
         const dist = lastPos ? Math.hypot(lat - lastPos.lat, lng - lastPos.lng) : 999;
-        // Strictly do not move or animate marker if driver is stationary
-        if (!lastPos || dist > 0.000035) {
+        // Move marker whenever physical displacement occurs (> ~0.8m)
+        if (!lastPos || dist > 0.000008) {
           marker.setLatLng([lat, lng]);
           lastBusMarkerCoordsRef.current.set(trip.id, { lat, lng });
         }

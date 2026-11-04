@@ -1363,6 +1363,14 @@ class TransitStore {
         } else {
           parsed.bookings = [];
         }
+
+        // Authoritatively upgrade stations and standard routes to authentic real-world coordinates
+        parsed.stations = INITIAL_STATIONS;
+        const customRoutes = Array.isArray(parsed.routes)
+          ? parsed.routes.filter((r: TransitRoute) => r.id && (r.id.startsWith('rt-drv-') || r.id.includes('gps')))
+          : [];
+        parsed.routes = [...INITIAL_ROUTES, ...customRoutes];
+
         return parsed;
       }
     } catch (e) {
