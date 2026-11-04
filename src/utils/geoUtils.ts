@@ -148,46 +148,9 @@ export function requestUserLocation(forceFresh = false): Promise<UserCoordinates
     };
 
     if (typeof window === 'undefined' || !navigator.geolocation) {
-      // IP physical device fallback if geolocation API is absent
-      fetch('/api/transit/detect-ip')
-        .then(r => r.json())
-        .then(data => {
-          finish({
-            lat: data?.lat || 25.3835,
-            lng: data?.lng || 49.5862,
-            accuracy: 50,
-            timestamp: Date.now()
-          });
-        })
-        .catch(() => {
-          finish({ lat: 25.3835, lng: 49.5862, accuracy: 50, timestamp: Date.now() });
-        });
+      finish({ lat: 25.4790, lng: 49.5424, accuracy: 50, timestamp: Date.now() });
       return;
     }
-
-    const fallbackToIp = async () => {
-      try {
-        const ipRes = await fetch('/api/transit/detect-ip');
-        if (ipRes.ok) {
-          const ipData = await ipRes.json();
-          if (ipData.success && typeof ipData.lat === 'number' && typeof ipData.lng === 'number') {
-            finish({
-              lat: Number(ipData.lat.toFixed(6)),
-              lng: Number(ipData.lng.toFixed(6)),
-              accuracy: 50,
-              timestamp: Date.now()
-            });
-            return;
-          }
-        }
-      } catch (e) {}
-      finish({
-        lat: 25.3835,
-        lng: 49.5862,
-        accuracy: 30,
-        timestamp: Date.now()
-      });
-    };
 
     const tryStandardAccuracy = () => {
       try {
@@ -201,12 +164,12 @@ export function requestUserLocation(forceFresh = false): Promise<UserCoordinates
             });
           },
           () => {
-            fallbackToIp();
+            finish({ lat: 25.4790, lng: 49.5424, accuracy: 30, timestamp: Date.now() });
           },
-          { enableHighAccuracy: false, timeout: 5000, maximumAge: 30000 }
+          { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
         );
       } catch {
-        fallbackToIp();
+        finish({ lat: 25.4790, lng: 49.5424, accuracy: 30, timestamp: Date.now() });
       }
     };
 
@@ -225,8 +188,8 @@ export function requestUserLocation(forceFresh = false): Promise<UserCoordinates
         },
         {
           enableHighAccuracy: true,
-          timeout: 4500,
-          maximumAge: 15000 // allows phone to use recent fix without spinning GPS hardware
+          timeout: 15000, // 15 seconds to give mobile GPS hardware enough time to get physical lock
+          maximumAge: forceFresh ? 0 : 10000
         }
       );
     } catch {

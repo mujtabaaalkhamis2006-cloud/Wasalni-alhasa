@@ -76,6 +76,8 @@ class TransitStore {
   private currentBrokerIndex = 0;
   private mqttFailCount = 0;
   private broadcastChannel: BroadcastChannel | null = null;
+  private lastBroadcastDriverCoords: { lat: number; lng: number; heading?: number; speed?: number; accuracy?: number } | null = null;
+  private lastBroadcastStamp: number = 0;
 
   public getApiBaseUrl(): string {
     if (typeof window !== 'undefined' && window.location && window.location.origin) {
@@ -207,6 +209,8 @@ class TransitStore {
           if (trip.status !== 'in_progress') trip.status = 'in_progress';
           this.notify();
         }
+      } else if (data.type === 'driver_live_location') {
+        this.handleRemoteDriverLocation(data);
       } else if (data.type === 'user_registered' && data.user) {
         this.handleRemoteUserRegistered(data.user, data.password);
       } else if (data.type === 'user_deleted') {
@@ -335,6 +339,13 @@ class TransitStore {
             }
           }
 
+          // 4b. Direct Driver Real Live Location Sharing
+          else if (topic === 'al-ahsa-transit/v5/driver-live-location') {
+            if (payload.coords && payload.senderSessionId !== this.sessionId) {
+              this.handleRemoteDriverLocation(payload);
+            }
+          }
+
           // 5. Trip Status Changed (e.g. Started, Finished/Completed, Cancelled)
           else if (topic === 'al-ahsa-transit/v5/trip-status') {
             if (payload.tripId && payload.status && payload.senderSessionId !== this.sessionId) {
@@ -438,7 +449,9 @@ class TransitStore {
       deviceType: this.deviceType,
       deviceName: this.deviceName,
       activeTripId: activeTrip?.id,
-      coords: activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined,
+      coords: (user?.role === 'driver' && this.lastBroadcastDriverCoords)
+        ? { lat: this.lastBroadcastDriverCoords.lat, lng: this.lastBroadcastDriverCoords.lng }
+        : (activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined),
       statusText: statusText || (activeTrip ? `يقود رحلة (${activeTrip.routeName}) 🚌` : user?.role === 'driver' ? 'كابتن متصل ومتاح 🟢' : user?.role === 'admin' ? 'إدارة العمليات 🛡️' : 'متصل بالمنصة 🟢'),
       isOnline: true,
       lastSeen: new Date().toISOString()
@@ -567,7 +580,14 @@ class TransitStore {
         }
       });
 
-      // 4b. Realtime Broadcast: Trip Status Changed (e.g. Started, Finished/Completed, Cancelled)
+      // 4b. Realtime Broadcast: Driver Live Location Direct Stream
+      channel.on('broadcast', { event: 'driver_live_location' }, ({ payload }: { payload: any }) => {
+        if (payload?.coords && payload?.senderSessionId !== this.sessionId) {
+          this.handleRemoteDriverLocation(payload);
+        }
+      });
+
+      // 4c. Realtime Broadcast: Trip Status Changed (e.g. Started, Finished/Completed, Cancelled)
       channel.on('broadcast', { event: 'trip_status' }, ({ payload }: { payload: any }) => {
         if (payload?.tripId && payload?.status) {
           const trip = this.data.trips.find(t => t.id === payload.tripId);
@@ -757,7 +777,9 @@ class TransitStore {
         deviceType: this.deviceType,
         deviceName: this.deviceName,
         activeTripId: activeTrip?.id,
-        coords: activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined,
+        coords: (user?.role === 'driver' && this.lastBroadcastDriverCoords)
+          ? { lat: this.lastBroadcastDriverCoords.lat, lng: this.lastBroadcastDriverCoords.lng }
+          : (activeTrip?.currentLocation ? { lat: activeTrip.currentLocation.lat, lng: activeTrip.currentLocation.lng } : undefined),
         statusText: statusText || (activeTrip ? `يقود رحلة (${activeTrip.routeName}) 🚌` : user?.role === 'driver' ? 'كابتن متصل ومتاح 🟢' : user?.role === 'admin' ? 'إدارة العمليات 🛡️' : 'متصل بالمنصة 🟢'),
         connectedAt: new Date().toISOString(),
         lastSeen: new Date().toISOString()
@@ -1078,6 +1100,130 @@ class TransitStore {
         // offline fallback
       }
     }
+  }
+
+  public handleRemoteDriverLocation(payload: any) {
+    if (!payload || !payload.coords) return;
+    const { driverId, tripId, coords } = payload;
+    // Update active presence list
+    const p = this.activePresence.find(x => x.userId === driverId || (payload.senderSessionId && x.sessionId === payload.senderSessionId));
+    if (p) {
+      p.coords = coords;
+      p.statusText = 'موقع الكابتن الفعلي المباشر 📍';
+      p.lastSeen = new Date().toISOString();
+    }
+    // Update active trip location if tripId matches or if driverId matches
+    const trip = tripId
+      ? this.data.trips.find(t => t.id === tripId)
+      : (driverId ? this.data.trips.find(t => t.driverId === driverId && (t.status === 'in_progress' || t.status === 'scheduled')) : null);
+
+    if (trip) {
+      trip.currentLocation = {
+        lat: coords.lat,
+        lng: coords.lng,
+        speed: coords.speed || 0,
+        heading: coords.heading || 0,
+        accuracy: coords.accuracy || 5,
+        lastUpdated: new Date().toISOString()
+      };
+      if (trip.status !== 'in_progress') trip.status = 'in_progress';
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      } catch {}
+    }
+    this.notify();
+  }
+
+  public async broadcastDriverLiveLocation(
+    lat: number,
+    lng: number,
+    accuracy?: number,
+    heading?: number,
+    speed?: number,
+    tripId?: string
+  ) {
+    const coords = {
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+      accuracy: accuracy || 5,
+      heading: heading || 0,
+      speed: speed || 0
+    };
+    this.lastBroadcastDriverCoords = coords;
+
+    // Update active trip if applicable
+    const targetTrip = tripId
+      ? this.data.trips.find(t => t.id === tripId)
+      : (this.currentUser?.role === 'driver'
+          ? this.data.trips.find(t => t.driverId === this.currentUser!.id && (t.status === 'in_progress' || t.status === 'scheduled'))
+          : null);
+
+    if (targetTrip) {
+      targetTrip.currentLocation = {
+        lat: coords.lat,
+        lng: coords.lng,
+        speed: coords.speed,
+        heading: coords.heading,
+        accuracy: coords.accuracy,
+        lastUpdated: new Date().toISOString()
+      };
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      } catch {}
+    }
+
+    // Update local presence
+    const myP = this.activePresence.find(p => p.sessionId === this.sessionId);
+    if (myP) {
+      myP.coords = coords;
+      myP.lastSeen = new Date().toISOString();
+    }
+
+    // 1. MQTT broadcast
+    this.publishMqtt('al-ahsa-transit/v5/driver-live-location', {
+      senderSessionId: this.sessionId,
+      driverId: this.currentUser?.id,
+      driverName: this.currentUser?.name,
+      tripId: targetTrip?.id,
+      coords,
+      timestamp: Date.now()
+    }, { qos: 0 });
+
+    if (targetTrip) {
+      this.publishMqtt('al-ahsa-transit/v5/gps', {
+        tripId: targetTrip.id,
+        currentLocation: targetTrip.currentLocation,
+        senderSessionId: this.sessionId
+      }, { qos: 0 });
+    }
+
+    // 2. Supabase Realtime broadcast
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'driver_live_location',
+          payload: {
+            senderSessionId: this.sessionId,
+            driverId: this.currentUser?.id,
+            driverName: this.currentUser?.name,
+            tripId: targetTrip?.id,
+            coords,
+            timestamp: Date.now()
+          }
+        });
+      } catch {}
+    }
+
+    // 3. Cross-Tab broadcast
+    this.broadcastCrossTab({
+      type: 'driver_live_location',
+      driverId: this.currentUser?.id,
+      tripId: targetTrip?.id,
+      coords
+    });
+
+    this.notify();
   }
 
   public async purgeMockData(): Promise<void> {
