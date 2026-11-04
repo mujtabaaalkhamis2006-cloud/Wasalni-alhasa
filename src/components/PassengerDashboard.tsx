@@ -86,6 +86,16 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
     }
   }, [activeTab, trips, trackedTripId]);
 
+  // Immediately clear trackedTripId when the trip is finished or cancelled by the driver
+  useEffect(() => {
+    if (trackedTripId) {
+      const active = trips.find(t => t.id === trackedTripId && t.status === 'in_progress');
+      if (!active) {
+        setTrackedTripId(null);
+      }
+    }
+  }, [trips, trackedTripId]);
+
   // Non-blocking auto detection of user physical device location on mount
   useEffect(() => {
     let isMounted = true;

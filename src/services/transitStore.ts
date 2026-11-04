@@ -69,8 +69,18 @@ class TransitStore {
   private isSupabaseConnected = false;
   private mqttClient: MqttClient | null = null;
   private isMqttConnected = false;
+  private mqttBrokers = [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt'
+  ];
+  private currentBrokerIndex = 0;
+  private mqttFailCount = 0;
+  private broadcastChannel: BroadcastChannel | null = null;
 
   public getApiBaseUrl(): string {
+    if (typeof window !== 'undefined' && window.location && window.location.origin) {
+      return window.location.origin;
+    }
     return CLOUD_RUN_BACKEND_URL;
   }
 
@@ -97,8 +107,11 @@ class TransitStore {
 
     this.data = this.loadData();
     this.currentUser = this.loadAuth();
+
+    // 0. Initialize Same-Browser Multi-Tab BroadcastChannel (Zero-delay local sync)
+    this.initBroadcastChannel();
     
-    // 1. Initialize High-Availability Universal MQTT Realtime (Dual-Carrier Cross-Device Sync)
+    // 1. Initialize High-Availability Universal MQTT Realtime (Dual-Broker Cross-Device Sync)
     this.initMqttRealtime();
 
     // 2. Initialize Supabase Realtime & WebSockets (Vercel & Multi-device primary sync)
@@ -136,6 +149,72 @@ class TransitStore {
         } catch {}
       });
     }
+  }
+
+  private initBroadcastChannel() {
+    if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
+    try {
+      this.broadcastChannel = new BroadcastChannel('al_ahsa_transit_realtime_sync');
+      this.broadcastChannel.onmessage = (event) => {
+        this.handleBroadcastChannelMessage(event.data);
+      };
+    } catch (e) {
+      console.warn('Could not initialize BroadcastChannel:', e);
+    }
+  }
+
+  public broadcastCrossTab(payload: any) {
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({
+          ...payload,
+          senderSessionId: this.sessionId,
+          timestamp: Date.now()
+        });
+      } catch {}
+    }
+  }
+
+  private handleBroadcastChannelMessage(data: any) {
+    if (!data || data.senderSessionId === this.sessionId) return;
+    try {
+      if (data.type === 'state_update' && data.state) {
+        const changed = this.mergeRemoteState(data.state);
+        if (changed) this.notify();
+      } else if (data.type === 'trip_status') {
+        const trip = this.data.trips.find(t => t.id === data.tripId);
+        if (trip) {
+          trip.status = data.status;
+          if (data.status === 'completed') {
+            this.data.bookings.forEach(b => {
+              if (b.tripId === data.tripId && b.status === 'confirmed') {
+                b.status = 'no_show';
+              }
+            });
+          }
+          if (data.currentLocation) {
+            trip.currentLocation = data.currentLocation;
+          }
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+          } catch {}
+          this.notify();
+        }
+      } else if (data.type === 'driver_gps') {
+        const trip = this.data.trips.find(t => t.id === data.tripId);
+        if (trip && data.currentLocation) {
+          trip.currentLocation = data.currentLocation;
+          if (trip.status !== 'in_progress') trip.status = 'in_progress';
+          this.notify();
+        }
+      } else if (data.type === 'user_registered' && data.user) {
+        this.handleRemoteUserRegistered(data.user, data.password);
+      } else if (data.type === 'user_deleted') {
+        this.handleRemoteUserDeleted(data.userId, data.deletedTripIds);
+      } else if (data.type === 'trip_deleted') {
+        this.handleRemoteTripDeleted(data.tripId);
+      }
+    } catch {}
   }
 
   private detectDevice(): { deviceType: 'mobile' | 'tablet' | 'desktop'; deviceName: string } {
@@ -193,20 +272,21 @@ class TransitStore {
         this.mqttClient = null;
       }
 
-      // High-availability TLS broker with global low-latency CDN edge nodes
-      const brokerUrl = 'wss://broker.emqx.io:8084/mqtt';
+      // High-availability TLS broker with automatic Edge failover
+      const brokerUrl = this.mqttBrokers[this.currentBrokerIndex % this.mqttBrokers.length];
       const client = mqtt.connect(brokerUrl, {
         clientId: `client_ahsa_${this.sessionId}_${Math.random().toString(36).substring(2, 7)}`,
         clean: true,
-        connectTimeout: 8000,
-        reconnectPeriod: 2000,
-        keepalive: 45
+        connectTimeout: 7000,
+        reconnectPeriod: 2500,
+        keepalive: 30
       });
 
       this.mqttClient = client;
 
       client.on('connect', () => {
         this.isMqttConnected = true;
+        this.mqttFailCount = 0;
         this.notify();
         // Subscribe to all Al Ahsa transit topics
         client.subscribe('al-ahsa-transit/v5/#', { qos: 1 });
@@ -255,21 +335,45 @@ class TransitStore {
             }
           }
 
-          // 5. User Deleted (Tombstone enforcement across all devices)
+          // 5. Trip Status Changed (e.g. Started, Finished/Completed, Cancelled)
+          else if (topic === 'al-ahsa-transit/v5/trip-status') {
+            if (payload.tripId && payload.status && payload.senderSessionId !== this.sessionId) {
+              const trip = this.data.trips.find(t => t.id === payload.tripId);
+              if (trip) {
+                trip.status = payload.status;
+                if (payload.status === 'completed') {
+                  this.data.bookings.forEach(b => {
+                    if (b.tripId === payload.tripId && b.status === 'confirmed') {
+                      b.status = 'no_show';
+                    }
+                  });
+                }
+                if (payload.currentLocation) {
+                  trip.currentLocation = payload.currentLocation;
+                }
+                try {
+                  localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+                } catch {}
+                this.notify();
+              }
+            }
+          }
+
+          // 6. User Deleted (Tombstone enforcement across all devices)
           else if (topic === 'al-ahsa-transit/v5/user-deleted') {
             if (payload.userId && payload.senderSessionId !== this.sessionId) {
               this.handleRemoteUserDeleted(payload.userId, payload.deletedTripIds);
             }
           }
 
-          // 6. Trip Deleted (Tombstone enforcement across all devices)
+          // 7. Trip Deleted (Tombstone enforcement across all devices)
           else if (topic === 'al-ahsa-transit/v5/trip-deleted') {
             if (payload.tripId && payload.senderSessionId !== this.sessionId) {
               this.handleRemoteTripDeleted(payload.tripId);
             }
           }
 
-          // 7. Sync Request from newly connected device
+          // 8. Sync Request from newly connected device
           else if (topic === 'al-ahsa-transit/v5/sync-request') {
             if (payload.requesterSessionId && payload.requesterSessionId !== this.sessionId) {
               this.publishMqtt('al-ahsa-transit/v5/state', {
@@ -286,6 +390,13 @@ class TransitStore {
 
       client.on('error', (err) => {
         console.warn('MQTT client error:', err);
+        this.mqttFailCount++;
+        if (this.mqttFailCount >= 3) {
+          this.currentBrokerIndex = (this.currentBrokerIndex + 1) % this.mqttBrokers.length;
+          console.info(`Failing over to MQTT broker: ${this.mqttBrokers[this.currentBrokerIndex]}`);
+          this.mqttFailCount = 0;
+          setTimeout(() => this.initMqttRealtime(), 2000);
+        }
       });
 
       client.on('offline', () => {
@@ -451,6 +562,30 @@ class TransitStore {
           if (trip) {
             trip.currentLocation = payload.currentLocation;
             if (trip.status !== 'in_progress') trip.status = 'in_progress';
+            this.notify();
+          }
+        }
+      });
+
+      // 4b. Realtime Broadcast: Trip Status Changed (e.g. Started, Finished/Completed, Cancelled)
+      channel.on('broadcast', { event: 'trip_status' }, ({ payload }: { payload: any }) => {
+        if (payload?.tripId && payload?.status) {
+          const trip = this.data.trips.find(t => t.id === payload.tripId);
+          if (trip) {
+            trip.status = payload.status;
+            if (payload.status === 'completed') {
+              this.data.bookings.forEach(b => {
+                if (b.tripId === payload.tripId && b.status === 'confirmed') {
+                  b.status = 'no_show';
+                }
+              });
+            }
+            if (payload.currentLocation) {
+              trip.currentLocation = payload.currentLocation;
+            }
+            try {
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+            } catch {}
             this.notify();
           }
         }
@@ -1993,6 +2128,33 @@ class TransitStore {
     }
 
     this.saveData(this.data);
+
+    // Multi-carrier broadcast for trip start
+    this.publishMqtt('al-ahsa-transit/v5/trip-status', {
+      tripId: trip.id,
+      status: 'in_progress',
+      currentLocation: trip.currentLocation,
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1 });
+
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'trip_status',
+          payload: { tripId: trip.id, status: 'in_progress', currentLocation: trip.currentLocation }
+        });
+      } catch {}
+    }
+
+    this.broadcastCrossTab({
+      type: 'trip_status',
+      tripId: trip.id,
+      status: 'in_progress',
+      currentLocation: trip.currentLocation
+    });
+
     if (trip.currentLocation) {
       this.broadcastDriverGps(
         trip.id,
@@ -2085,6 +2247,33 @@ class TransitStore {
     });
 
     this.saveData(this.data);
+
+    // Explicit instant multi-carrier broadcast of trip completion to all connected devices & tabs
+    this.publishMqtt('al-ahsa-transit/v5/trip-status', {
+      tripId,
+      status: 'completed',
+      senderSessionId: this.sessionId,
+      boardedCount,
+      noShowCount,
+      timestamp: Date.now()
+    }, { qos: 1 });
+
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'trip_status',
+          payload: { tripId, status: 'completed' }
+        });
+      } catch {}
+    }
+
+    this.broadcastCrossTab({
+      type: 'trip_status',
+      tripId,
+      status: 'completed'
+    });
+
     return { success: true, boardedCount, noShowCount };
   }
 
@@ -2110,6 +2299,30 @@ class TransitStore {
     });
 
     this.saveData(this.data);
+
+    this.publishMqtt('al-ahsa-transit/v5/trip-status', {
+      tripId,
+      status: 'cancelled',
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1 });
+
+    if (this.supabaseChannel && this.isSupabaseConnected) {
+      try {
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'trip_status',
+          payload: { tripId, status: 'cancelled' }
+        });
+      } catch {}
+    }
+
+    this.broadcastCrossTab({
+      type: 'trip_status',
+      tripId,
+      status: 'cancelled'
+    });
+
     return { success: true };
   }
 

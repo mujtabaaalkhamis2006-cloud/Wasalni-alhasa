@@ -171,6 +171,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   const stationMarkersRef = useRef<L.LayerGroup | null>(null);
   const busMarkersRef = useRef<Map<string, L.Marker>>(new Map());
   const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
+  const activeRouteGlowPolylineRef = useRef<L.Polyline | null>(null);
   const userMarkerRef = useRef<L.Marker | null>(null);
   const passengerMarkersRef = useRef<L.LayerGroup | null>(null);
 
@@ -385,31 +386,34 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       activeRoutePolylineRef.current.remove();
       activeRoutePolylineRef.current = null;
     }
+    if (activeRouteGlowPolylineRef.current) {
+      activeRouteGlowPolylineRef.current.remove();
+      activeRouteGlowPolylineRef.current = null;
+    }
 
     if (trackedTrip && trackedTrip.status === 'in_progress') {
       const tripRoute = routes.find(r => r.id === trackedTrip.routeId);
       const points: [number, number][] = [];
 
-      // Add all stations of the route
+      // Add current authentic physical bus location as the starting point
+      if (trackedTrip.currentLocation) {
+        points.push([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng]);
+      }
+
+      // Add subsequent stations of the route
       if (tripRoute && tripRoute.stations && tripRoute.stations.length > 0) {
         tripRoute.stations.forEach(s => points.push([s.lat, s.lng]));
       }
 
-      // Add current bus location
-      if (trackedTrip.currentLocation) {
-        // Insert current location appropriately or connect
-        points.unshift([trackedTrip.currentLocation.lat, trackedTrip.currentLocation.lng]);
-      }
-
       if (points.length >= 2) {
         // Thick road underlay path
-        L.polyline(points, {
+        activeRouteGlowPolylineRef.current = L.polyline(points, {
           color: '#059669',
           weight: 9,
           opacity: 0.35,
           lineCap: 'round',
           lineJoin: 'round'
-        }).addTo(routeLayersRef.current!);
+        }).addTo(mapRef.current);
 
         activeRoutePolylineRef.current = L.polyline(points, {
           color: '#10b981',

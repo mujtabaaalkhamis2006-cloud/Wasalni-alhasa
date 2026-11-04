@@ -93,12 +93,16 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     const trips = transitStore.getDriverTrips(currentUser.id);
     setDriverTrips(trips);
 
-    // Pick active in_progress trip or first scheduled
-    if (!activeTripId && trips.length > 0) {
+    // If activeTripId is not set, or points to completed/cancelled trip: prefer in_progress, then scheduled
+    const current = trips.find(t => t.id === activeTripId);
+    if (!activeTripId || (current && (current.status === 'completed' || current.status === 'cancelled'))) {
       const inProg = trips.find(t => t.status === 'in_progress');
+      const scheduled = trips.find(t => t.status === 'scheduled');
       if (inProg) {
         setActiveTripId(inProg.id);
-      } else {
+      } else if (scheduled) {
+        setActiveTripId(scheduled.id);
+      } else if (!activeTripId && trips.length > 0) {
         setActiveTripId(trips[0].id);
       }
     }
@@ -258,56 +262,10 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       }
     }
 
-    // Pulse interval for tracking driver along route and broadcasting real-time continuous GPS updates
-    let currentStationIndex = 0;
-    let progressRatio = 0.0;
-
+    // Periodic telemetry heartbeat: broadcasts ONLY the driver's authentic physical device GPS coordinates
     pulseInterval = setInterval(() => {
       if (activeTripId && currentTrip?.status === 'in_progress') {
-        const tripRoute = routes.find(r => r.id === currentTrip.routeId);
-        const stations = tripRoute?.stations || [];
-
-        if (stations.length >= 2) {
-          // Increment progress along segment smoothly (0.0 -> 0.2 -> 0.4 -> 0.6 -> 0.8 -> next station)
-          progressRatio += 0.2;
-          if (progressRatio >= 1.0) {
-            progressRatio = 0.0;
-            currentStationIndex = (currentStationIndex + 1) % (stations.length - 1);
-          }
-
-          const fromStation = stations[currentStationIndex];
-          const toStation = stations[currentStationIndex + 1] || stations[0];
-
-          // Realistic linear interpolation between route stations
-          const lat = Number((fromStation.lat + (toStation.lat - fromStation.lat) * progressRatio).toFixed(6));
-          const lng = Number((fromStation.lng + (toStation.lng - fromStation.lng) * progressRatio).toFixed(6));
-          
-          const dLng = toStation.lng - fromStation.lng;
-          const dLat = toStation.lat - fromStation.lat;
-          const heading = Math.round(((Math.atan2(dLng, dLat) * 180) / Math.PI + 360) % 360);
-
-          lastDeviceCoordsRef.current = { lat, lng, time: Date.now() };
-          setDriverDeviceCoords({ lat, lng, accuracy: 5, speed: 0, heading });
-          setGpsTelemetry(prev => ({
-            ...prev,
-            lat,
-            lng,
-            heading,
-            speed: 0,
-            lastBroadcast: new Date(),
-            broadcastCount: prev.broadcastCount + 1
-          }));
-
-          transitStore.broadcastDriverGps(
-            activeTripId,
-            lat,
-            lng,
-            0,
-            heading,
-            5,
-            currentUser.id
-          );
-        } else if (lastDeviceCoordsRef.current) {
+        if (lastDeviceCoordsRef.current) {
           transitStore.broadcastDriverGps(
             activeTripId,
             lastDeviceCoordsRef.current.lat,
@@ -319,7 +277,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
           );
         }
       }
-    }, 2500);
+    }, 3000);
 
     return () => {
       if (watchId !== null && 'geolocation' in navigator) navigator.geolocation.clearWatch(watchId);
@@ -423,6 +381,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
   // Requirement: Finish Trip -> non-boarded become no_show
   const handleFinishTrip = () => {
     if (!activeTripId) return;
+    const tripToFinish = activeTripId;
     setConfirmDialog({
       isOpen: true,
       title: 'إنهاء الرحلة الحالية',
@@ -430,13 +389,27 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       confirmLabel: 'تأكيد إنهاء الرحلة',
       type: 'warning',
       onConfirm: () => {
-        const res = transitStore.finishTrip(activeTripId);
+        const res = transitStore.finishTrip(tripToFinish);
         if (res.success) {
           setFeedback({
             type: 'success',
-            msg: `تم إنهاء الرحلة بنجاح! صعد (${res.boardedCount}) راكب، وسُجّل (${res.noShowCount}) كـ No-Show.`
+            msg: `تم إنهاء الرحلة بنجاح! صعد (${res.boardedCount || 0}) راكب، وسُجّل (${res.noShowCount || 0}) كـ No-Show.`
           });
           setGpsTelemetry(prev => ({ ...prev, active: false }));
+
+          // Automatically switch to another active or scheduled trip, or reset active selection
+          const allTrips = transitStore.getDriverTrips(currentUser.id);
+          const nextInProg = allTrips.find(t => t.id !== tripToFinish && t.status === 'in_progress');
+          const nextScheduled = allTrips.find(t => t.id !== tripToFinish && t.status === 'scheduled');
+
+          if (nextInProg) {
+            setActiveTripId(nextInProg.id);
+          } else if (nextScheduled) {
+            setActiveTripId(nextScheduled.id);
+          } else {
+            setActiveTripId(null);
+          }
+
           refreshData();
         } else {
           setFeedback({ type: 'error', msg: res.error || 'تعذر إنهاء الرحلة' });
@@ -944,12 +917,16 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       )}
 
       {!currentTrip ? (
-        <div className="text-center py-16 bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-4">
+        <div className="text-center py-14 bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-4">
           <Bus className="w-14 h-14 text-amber-400/60 mx-auto" />
           <div>
-            <h4 className="text-white font-black text-base mb-1">لم تقم بإطلاق أي رحلة بعد</h4>
+            <h4 className="text-white font-black text-base mb-1">
+              {driverTrips.length > 0 ? 'لا توجد رحلة جارية محددة حالياً' : 'لم تقم بإطلاق أي رحلة بعد'}
+            </h4>
             <p className="text-xs text-slate-400 max-w-md mx-auto">
-              بصفتك سائقاً معتمداً، يمكنك اختيار المسار المناسب لك وتحديد وقت الانطلاق وسعر التذكرة ليظهر فوراً للركاب في الأحساء.
+              {driverTrips.length > 0
+                ? 'تم إنهاء أو اكتمال رحلتك بنجاح. بإمكانك إطلاق رحلة جديدة عبر الزر أدناه، أو اختيار رحلة من جدول رحلاتك لعرض تفاصيلها.'
+                : 'بصفتك سائقاً معتمداً، يمكنك اختيار المسار المناسب لك وتحديد وقت الانطلاق وسعر التذكرة ليظهر فوراً للركاب في الأحساء.'}
             </p>
           </div>
           <button
@@ -1321,71 +1298,71 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
               />
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Driver's all trips summary table */}
-          {driverTrips.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-3">
-              <div className="flex items-center justify-between">
-                <h4 className="font-bold text-white text-sm">سجل رحلاتي ({driverTrips.length})</h4>
-                <span className="text-[11px] text-slate-400">بإمكانك التبديل بين رحلاتك أو إلغاء أي رحلة مجدولة</span>
-              </div>
+      {/* Driver's all trips summary table (Always visible to driver to inspect past, completed or scheduled trips) */}
+      {driverTrips.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="font-bold text-white text-sm">سجل رحلاتي ({driverTrips.length})</h4>
+            <span className="text-[11px] text-slate-400">بإمكانك التبديل بين رحلاتك أو إلغاء أي رحلة مجدولة</span>
+          </div>
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs text-slate-300">
-                  <thead className="bg-slate-800/80 text-slate-400 font-bold border-b border-slate-800">
-                    <tr>
-                      <th className="p-3">المسار</th>
-                      <th className="p-3">الانطلاق</th>
-                      <th className="p-3">السعر</th>
-                      <th className="p-3">المقاعد</th>
-                      <th className="p-3">الحالة</th>
-                      <th className="p-3 text-center">إجراءات السائق</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800">
-                    {driverTrips.map(t => (
-                      <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
-                        <td className="p-3 font-bold text-white">{t.routeName}</td>
-                        <td className="p-3 text-slate-300">
-                          {new Date(t.departureTime).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}
-                        </td>
-                        <td className="p-3 text-amber-400 font-bold">{t.price} ر.س</td>
-                        <td className="p-3 text-emerald-400 font-bold">{t.availableSeats} متبقي / {t.totalSeats}</td>
-                        <td className="p-3">
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            t.status === 'in_progress' ? 'bg-emerald-950 text-emerald-400' :
-                            t.status === 'completed' ? 'bg-slate-800 text-slate-400' :
-                            t.status === 'cancelled' ? 'bg-rose-950 text-rose-400' :
-                            'bg-sky-950 text-sky-400'
-                          }`}>
-                            {t.status === 'in_progress' ? 'جارية' : t.status === 'completed' ? 'منتهية' : t.status === 'cancelled' ? 'ملغاة' : 'مجدولة'}
-                          </span>
-                        </td>
-                        <td className="p-3 text-center">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <button
-                              onClick={() => setActiveTripId(t.id)}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-[11px]"
-                            >
-                              عرض في اللوحة
-                            </button>
-                            {t.status !== 'completed' && t.status !== 'cancelled' && (
-                              <button
-                                onClick={() => handleCancelTrip(t.id, t.routeName)}
-                                className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 font-bold text-[11px]"
-                              >
-                                إلغاء الرحلة
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          <div className="overflow-x-auto">
+            <table className="w-full text-right text-xs text-slate-300">
+              <thead className="bg-slate-800/80 text-slate-400 font-bold border-b border-slate-800">
+                <tr>
+                  <th className="p-3">المسار</th>
+                  <th className="p-3">الانطلاق</th>
+                  <th className="p-3">السعر</th>
+                  <th className="p-3">المقاعد</th>
+                  <th className="p-3">الحالة</th>
+                  <th className="p-3 text-center">إجراءات السائق</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {driverTrips.map(t => (
+                  <tr key={t.id} className="hover:bg-slate-800/40 transition-colors">
+                    <td className="p-3 font-bold text-white">{t.routeName}</td>
+                    <td className="p-3 text-slate-300">
+                      {new Date(t.departureTime).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="p-3 text-amber-400 font-bold">{t.price} ر.س</td>
+                    <td className="p-3 text-emerald-400 font-bold">{t.availableSeats} متبقي / {t.totalSeats}</td>
+                    <td className="p-3">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        t.status === 'in_progress' ? 'bg-emerald-950 text-emerald-400' :
+                        t.status === 'completed' ? 'bg-slate-800 text-slate-400' :
+                        t.status === 'cancelled' ? 'bg-rose-950 text-rose-400' :
+                        'bg-sky-950 text-sky-400'
+                      }`}>
+                        {t.status === 'in_progress' ? 'جارية' : t.status === 'completed' ? 'منتهية' : t.status === 'cancelled' ? 'ملغاة' : 'مجدولة'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-center">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => setActiveTripId(t.id)}
+                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-[11px]"
+                        >
+                          عرض في اللوحة
+                        </button>
+                        {t.status !== 'completed' && t.status !== 'cancelled' && (
+                          <button
+                            onClick={() => handleCancelTrip(t.id, t.routeName)}
+                            className="px-2.5 py-1 rounded-lg bg-rose-950/70 hover:bg-rose-900 border border-rose-800 text-rose-300 font-bold text-[11px]"
+                          >
+                            إلغاء الرحلة
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
