@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, ActivePresence } from '../types/transit';
-import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Menu, X, KeyRound, UserPlus, Radio } from 'lucide-react';
+import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Menu, X, Radio } from 'lucide-react';
 import { transitStore } from '../services/transitStore';
 import { LivePresenceModal } from './LivePresenceModal';
 
@@ -60,9 +60,9 @@ export const Navbar: React.FC<NavbarProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-extrabold text-lg text-white tracking-tight">حافلات الأحساء</span>
+                <span className="font-extrabold text-lg text-white tracking-tight">وصلني في الأحساء</span>
                 <span className="bg-sky-500/10 border border-sky-500/30 text-sky-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
-                  النقل العام
+                  النقل الذكي
                 </span>
               </div>
               <p className="text-[11px] text-slate-400">شبكة النقل الذكي لواحة الأحساء</p>
@@ -80,36 +80,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               }`}
             >
               الرئيسية
-            </button>
-            <button
-              onClick={() => onNavigate('/driver-register.html')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentPath === '/driver-register.html'
-                  ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              تسجيل سائق (/driver-register.html)
-            </button>
-            <button
-              onClick={() => onNavigate('/driver-login.html')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentPath === '/driver-login.html'
-                  ? 'bg-amber-600/20 text-amber-400 border border-amber-500/30'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              دخول السائق (/driver-login.html)
-            </button>
-            <button
-              onClick={() => onNavigate('/admin-login.html')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentPath === '/admin-login.html'
-                  ? 'bg-rose-600/20 text-rose-400 border border-rose-500/30'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              دخول الإدارة (/admin-login.html)
             </button>
           </nav>
 
@@ -201,51 +171,19 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Mobile Dedicated Quick-Action Bar: Always accessible on phones */}
-        <div className="lg:hidden py-2 border-t border-slate-800/80 flex items-center justify-between gap-1.5 overflow-x-auto text-[11px]">
+        {/* Mobile Dedicated Quick-Action Bar */}
+        <div className="lg:hidden py-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
           <button
             onClick={() => handleMobileNav('/')}
-            className={`px-2.5 py-1 rounded-lg font-bold shrink-0 transition-all ${
+            className={`px-3 py-1 rounded-lg font-bold transition-all ${
               currentPath === '/'
-                ? 'bg-sky-600 text-white'
+                ? 'bg-sky-600 text-white shadow-sm'
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
           >
             الرئيسية
           </button>
-          <button
-            onClick={() => handleMobileNav('/driver-register.html')}
-            className={`px-3 py-1 rounded-lg font-bold shrink-0 transition-all flex items-center gap-1 ${
-              currentPath === '/driver-register.html'
-                ? 'bg-amber-500 text-slate-950 font-black shadow-md'
-                : 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
-            }`}
-          >
-            <UserPlus className="w-3.5 h-3.5" />
-            <span>تسجيل سائق</span>
-          </button>
-          <button
-            onClick={() => handleMobileNav('/driver-login.html')}
-            className={`px-2.5 py-1 rounded-lg font-semibold shrink-0 transition-all flex items-center gap-1 ${
-              currentPath === '/driver-login.html'
-                ? 'bg-amber-600 text-white font-bold'
-                : 'bg-slate-800 text-amber-400 hover:bg-slate-700'
-            }`}
-          >
-            <Bus className="w-3.5 h-3.5" />
-            <span>دخول السائق</span>
-          </button>
-          <button
-            onClick={() => handleMobileNav('/admin-login.html')}
-            className={`px-2.5 py-1 rounded-lg font-semibold shrink-0 transition-all flex items-center gap-1 ${
-              currentPath === '/admin-login.html'
-                ? 'bg-rose-600 text-white font-bold'
-                : 'bg-slate-800 text-rose-400 hover:bg-slate-700'
-            }`}
-          >
-            <Shield className="w-3.5 h-3.5" />
-            <span>الإدارة</span>
-          </button>
+          <span className="text-[10px] text-slate-500 font-bold">وصلني في الأحساء</span>
         </div>
 
         {/* Mobile Dropdown Menu Drawer */}
@@ -253,40 +191,10 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="lg:hidden py-3 border-t border-slate-800 space-y-1.5 animate-in slide-in-from-top duration-200">
             <button
               onClick={() => handleMobileNav('/')}
-              className="w-full text-right px-3.5 py-2 rounded-xl text-xs font-bold text-white hover:bg-slate-800 flex items-center justify-between"
+              className="w-full text-right px-3.5 py-2.5 rounded-xl text-xs font-bold text-white hover:bg-slate-800 flex items-center justify-between"
             >
-              <span>الرئيسية (لوحة الراكب والرحلات)</span>
+              <span>الرئيسية (لوحة الراكب والرحلات وحسابات السائقين)</span>
               <span className="text-[10px] text-slate-500" dir="ltr">/</span>
-            </button>
-            <button
-              onClick={() => handleMobileNav('/driver-register.html')}
-              className="w-full text-right px-3.5 py-2.5 rounded-xl text-xs font-black text-amber-300 bg-amber-950/40 border border-amber-800/60 hover:bg-amber-900/50 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <Bus className="w-4 h-4 text-amber-400" />
-                <span>تسجيل سائق جديد وبيانات الحافلة</span>
-              </div>
-              <span className="text-[10px] text-amber-400" dir="ltr">/driver-register.html</span>
-            </button>
-            <button
-              onClick={() => handleMobileNav('/driver-login.html')}
-              className="w-full text-right px-3.5 py-2 rounded-xl text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                <span>دخول السائق المعتمد</span>
-              </div>
-              <span className="text-[10px] text-slate-500" dir="ltr">/driver-login.html</span>
-            </button>
-            <button
-              onClick={() => handleMobileNav('/admin-login.html')}
-              className="w-full text-right px-3.5 py-2 rounded-xl text-xs font-bold text-rose-300 hover:text-white hover:bg-slate-800 flex items-center justify-between"
-            >
-              <div className="flex items-center gap-2">
-                <Shield className="w-3.5 h-3.5 text-rose-400" />
-                <span>دخول الإدارة المركزية</span>
-              </div>
-              <span className="text-[10px] text-slate-500" dir="ltr">/admin-login.html</span>
             </button>
           </div>
         )}

@@ -545,7 +545,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
           </div>
           <div>
             <h3 className="font-bold text-white text-sm flex items-center gap-2">
-              <span>{isDriverView ? 'خريطة ركاب الرحلة ونقاط النزول' : 'خريطة حافلات الأحساء الحقيقية (Real Map)'}</span>
+              <span>{isDriverView ? 'خريطة ركاب الرحلة ونقاط النزول' : 'خريطة وصلني في الأحساء الحقيقية (Real Map)'}</span>
               <span className="text-[10px] bg-sky-950 text-sky-300 border border-sky-800 px-2 py-0.5 rounded-full font-bold">
                 OpenStreetMap / Sat
               </span>
@@ -701,7 +701,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       {/* Map Footer: Routes legend & pricing */}
       <div className="p-3 bg-slate-950 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex flex-wrap items-center gap-3.5 text-slate-300">
-          <span className="text-slate-500 font-bold">دليل مسارات حافلات الأحساء:</span>
+          <span className="text-slate-500 font-bold">دليل مسارات وصلني في الأحساء:</span>
           {routes.map(r => (
             <div key={`legend-${r.id}`} className="flex items-center gap-1.5">
               <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: r.color }} />

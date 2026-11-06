@@ -218,7 +218,7 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [];
 
 export const INITIAL_ANNOUNCEMENT: Announcement = {
   id: 'ann-1',
-  text: '📢 مرحباً بكم في شبكة حافلات الأحساء المباشرة. تم ضبط مواقع الكلية التقنية والجامعة ومحطات الأحساء الحقيقية بدقة.',
+  text: '📢 مرحباً بكم في شبكة وصلني في الأحساء المباشرة. تم ضبط مواقع الكلية التقنية والجامعة ومحطات الأحساء الحقيقية بدقة.',
   active: true,
   publishedAt: new Date().toISOString()
 };

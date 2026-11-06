@@ -830,7 +830,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-black text-white">سجل حجوزاتي في حافلات الأحساء</h3>
+              <h3 className="text-lg font-black text-white">سجل حجوزاتي في وصلني في الأحساء</h3>
               <p className="text-xs text-slate-400">تابع حالة صعودك للحافلة، رقم مقعدك، وإمكانية إلغاء الحجز</p>
             </div>
             <button
@@ -892,7 +892,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                             تذكرة حافلة رقم #{b.id.slice(-6)}
                           </div>
                           <h4 className="font-bold text-white text-sm">
-                            {trip ? trip.routeName : 'رحلة حافلات الأحساء'}
+                            {trip ? trip.routeName : 'رحلة وصلني في الأحساء'}
                           </h4>
                         </div>
                         <div className="text-left">
@@ -976,7 +976,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-lg font-black text-white">خريطة شبكة حافلات الأحساء وتتبع الحافلات المباشر</h3>
+                <h3 className="text-lg font-black text-white">خريطة شبكة وصلني في الأحساء وتتبع الحافلات المباشر</h3>
                 <p className="text-xs text-slate-400">
                   تتبع حركة الحافلات الجارية على الطريق مباشرة، واكتشف موقعك عبر GPS وأقرب محطة إليك
                 </p>
@@ -999,7 +999,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 shadow-lg flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2">
                 <Bus className="w-4 h-4 text-emerald-400 shrink-0 animate-bounce" />
-                <span className="font-bold text-white">حافلات الأحساء الجارية على الطريق الآن:</span>
+                <span className="font-bold text-white">حافلات وصلني في الأحساء الجارية على الطريق الآن:</span>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 {trips.filter(t => t.status === 'in_progress').length === 0 ? (
@@ -1182,7 +1182,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
           <div className="md:col-span-6 space-y-4">
             <h3 className="text-lg font-black text-white flex items-center gap-2">
               <HelpCircle className="w-5 h-5 text-sky-400" />
-              <span>الأسئلة الشائعة حول حافلات الأحساء</span>
+              <span>الأسئلة الشائعة حول وصلني في الأحساء</span>
             </h3>
 
             <div className="space-y-3 text-xs">

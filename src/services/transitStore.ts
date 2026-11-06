@@ -78,6 +78,7 @@ class TransitStore {
   private broadcastChannel: BroadcastChannel | null = null;
   private lastBroadcastDriverCoords: { lat: number; lng: number; heading?: number; speed?: number; accuracy?: number } | null = null;
   private lastBroadcastStamp: number = 0;
+  private supabaseReconnectTimer: any = null;
 
   public getApiBaseUrl(): string {
     if (typeof window !== 'undefined' && window.location && window.location.origin) {
@@ -99,6 +100,28 @@ class TransitStore {
     return {
       isConnected: this.isMqttConnected
     };
+  }
+
+  public ensureRealtimeConnections() {
+    if (typeof window === 'undefined') return;
+    const cfg = getSupabaseConfig();
+    if (cfg.isConfigured && (!this.isSupabaseConnected || !this.supabaseChannel)) {
+      this.initRealtimeSupabase();
+    }
+    if (!this.isMqttConnected || !this.mqttClient) {
+      this.initMqttRealtime();
+    }
+  }
+
+  private scheduleSupabaseReconnect() {
+    if (typeof window === 'undefined') return;
+    if (this.supabaseReconnectTimer) return;
+    this.supabaseReconnectTimer = setTimeout(() => {
+      this.supabaseReconnectTimer = null;
+      if (!this.isSupabaseConnected) {
+        this.initRealtimeSupabase();
+      }
+    }, 2500);
   }
 
   constructor() {
@@ -134,6 +157,23 @@ class TransitStore {
       setInterval(() => {
         this.syncWithServer();
       }, 6000);
+
+      // Supabase & Realtime keep-alive / auto-recovery ping every 10s
+      setInterval(() => {
+        this.ensureRealtimeConnections();
+      }, 10000);
+
+      window.addEventListener('online', () => {
+        this.ensureRealtimeConnections();
+        this.syncWithServer();
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          this.ensureRealtimeConnections();
+          this.syncWithServer();
+        }
+      });
 
       window.addEventListener('beforeunload', () => {
         if (this.mqttClient) {
@@ -683,9 +723,10 @@ class TransitStore {
             payload: { requesterSessionId: this.sessionId }
           });
           this.notify();
-        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+        } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
           this.isSupabaseConnected = false;
           this.notify();
+          this.scheduleSupabaseReconnect();
         }
       });
     } catch (err) {
@@ -979,8 +1020,6 @@ class TransitStore {
     } catch {}
   }
 
-  private lastBroadcastStamp = 0;
-
   public async pushRegistration(user: User, pass?: string) {
     if (typeof window === 'undefined') return;
 
@@ -1055,11 +1094,30 @@ class TransitStore {
       this.notify();
     }
 
+    this.lastBroadcastDriverCoords = newLocation;
+
+    // Update active presence list locally
+    const myP = this.activePresence.find(p => p.sessionId === this.sessionId);
+    if (myP) {
+      myP.coords = newLocation;
+      myP.lastSeen = new Date().toISOString();
+      myP.activeTripId = tripId;
+    }
+
     // 2. MQTT High-Speed GPS Broadcast to all phones and admin dashboard
     this.publishMqtt('al-ahsa-transit/v5/gps', {
       tripId,
       currentLocation: newLocation,
       senderSessionId: this.sessionId
+    }, { qos: 0 });
+
+    this.publishMqtt('al-ahsa-transit/v5/driver-live-location', {
+      senderSessionId: this.sessionId,
+      driverId: driverId || trip?.driverId || this.currentUser?.id,
+      driverName: this.currentUser?.name,
+      tripId,
+      coords: newLocation,
+      timestamp: now
     }, { qos: 0 });
 
     // 3. Broadcast via Supabase Realtime WebSockets
@@ -1070,9 +1128,34 @@ class TransitStore {
           event: 'driver_gps',
           payload: { tripId, currentLocation: newLocation }
         });
+        this.supabaseChannel.send({
+          type: 'broadcast',
+          event: 'driver_live_location',
+          payload: {
+            senderSessionId: this.sessionId,
+            driverId: driverId || trip?.driverId || this.currentUser?.id,
+            driverName: this.currentUser?.name,
+            tripId,
+            coords: newLocation,
+            timestamp: now
+          }
+        });
       } catch {}
     }
     this.trackSupabasePresence();
+
+    // 4. Cross-Tab broadcast
+    this.broadcastCrossTab({
+      type: 'driver_gps',
+      tripId,
+      currentLocation: newLocation
+    });
+    this.broadcastCrossTab({
+      type: 'driver_live_location',
+      driverId: driverId || trip?.driverId || this.currentUser?.id,
+      tripId,
+      coords: newLocation
+    });
 
     // Throttle network HTTP broadcast to at most once per 2 seconds to keep mobile responsive
     if (now - this.lastBroadcastStamp < 2000) {

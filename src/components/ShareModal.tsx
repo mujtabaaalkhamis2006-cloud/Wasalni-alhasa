@@ -32,8 +32,8 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
   if (!isOpen) return null;
 
-  const appTitle = 'حافلات الأحساء | Al-Ahsa Buses Transit';
-  const shareText = `🚌 تطبيق حافلات الأحساء للنقل العام\nاحجز مقعدك وتتبع مسار الحافلة ومواعيد الرحلات مباشرة في الأحساء (الهفوف، المبرز، جامعة الملك فيصل، محطة سار):`;
+  const appTitle = 'وصلني في الأحساء | تطبيق النقل وحجز الرحلات';
+  const shareText = `🚌 تطبيق "وصلني في الأحساء" للنقل العام والذكي\nاحجز مقعدك وتتبع مسار الحافلة ومواعيد الرحلات مباشرة في الأحساء (الهفوف، المبرز، جامعة الملك فيصل، محطة سار):`;
   const fullShareMessage = `${shareText}\n${activeUrl}`;
 
   const handleSaveUrl = (urlToSave: string) => {
@@ -101,7 +101,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               <Share2 className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-black text-white">مشاركة تطبيق حافلات الأحساء</h3>
+              <h3 className="text-base font-black text-white">مشاركة تطبيق وصلني في الأحساء</h3>
               <p className="text-xs text-slate-400">شارك الرابط مع الركاب أو السائقين لفتح التطبيق مباشرة</p>
             </div>
           </div>

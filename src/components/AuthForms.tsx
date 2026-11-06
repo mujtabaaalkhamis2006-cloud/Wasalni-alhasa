@@ -1,7 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { transitStore } from '../services/transitStore';
 import { User, Announcement } from '../types/transit';
-import { Bus, UserPlus, LogIn, Shield, CheckCircle, AlertCircle, Sparkles, Phone, Mail, Lock, User as UserIcon } from 'lucide-react';
+import {
+  Bus,
+  UserPlus,
+  LogIn,
+  Shield,
+  CheckCircle,
+  AlertCircle,
+  Sparkles,
+  Phone,
+  Mail,
+  Lock,
+  User as UserIcon,
+  Truck,
+  Hash,
+  Users,
+  KeyRound
+} from 'lucide-react';
 
 interface AuthFormsProps {
   currentPath: string;
@@ -16,10 +32,32 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
   onLoginSuccess,
   onNavigate
 }) => {
-  // Tabs for default home view: 'login' or 'register'
-  const [passengerTab, setPassengerTab] = useState<'login' | 'register'>('login');
+  // Determine initial role and tab based on current path
+  const initialRole: 'passenger' | 'driver' =
+    currentPath === '/driver-login.html' || currentPath === '/driver-register.html'
+      ? 'driver'
+      : 'passenger';
 
-  // Form states
+  const initialTab: 'login' | 'register' =
+    currentPath === '/driver-register.html' ? 'register' : 'login';
+
+  const [authRole, setAuthRole] = useState<'passenger' | 'driver'>(initialRole);
+  const [authTab, setAuthTab] = useState<'login' | 'register'>(initialTab);
+
+  // Synchronize state if URL path changes externally
+  useEffect(() => {
+    if (currentPath === '/driver-register.html') {
+      setAuthRole('driver');
+      setAuthTab('register');
+    } else if (currentPath === '/driver-login.html') {
+      setAuthRole('driver');
+      setAuthTab('login');
+    } else if (currentPath === '/') {
+      // Keep selected role or default to passenger
+    }
+  }, [currentPath]);
+
+  // Form input states
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
@@ -37,8 +75,8 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Clear messages on path change
-  const resetForm = () => {
+  // Clear messages when switching tabs or roles
+  const resetFeedback = () => {
     setErrorMsg(null);
     setSuccessMsg(null);
   };
@@ -47,7 +85,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
   const handlePassengerLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.loginAsync(identifier, password, 'passenger');
     setIsLoading(false);
@@ -63,7 +101,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
   const handlePassengerRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.registerPassenger(name, phone, email, password);
     await transitStore.syncWithServer();
@@ -76,11 +114,11 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     }
   };
 
-  // Driver Login (/driver-login.html)
+  // Driver Login
   const handleDriverLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.loginAsync(identifier, password, 'driver');
     setIsLoading(false);
@@ -92,11 +130,11 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     }
   };
 
-  // Driver Register (/driver-register.html)
+  // Driver Register
   const handleDriverRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.registerDriver({
       name,
@@ -112,8 +150,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     setIsLoading(false);
 
     if (result.success) {
-      setSuccessMsg('تم إرسال طلب تسجيل السائق والحافلة بنجاح! سيبقى الحساب قيد المراجعة (pending) حتى توافق الإدارة.');
-      // Clear inputs
+      setSuccessMsg('تم إرسال طلب تسجيل السائق والحافلة بنجاح! سيبقى الحساب قيد المراجعة (معلّق) حتى توافق الإدارة.');
       setName('');
       setPhone('');
       setEmail('');
@@ -121,19 +158,18 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
       setPlateNumber('');
       setModel('');
     } else {
-      setErrorMsg(result.error || 'حدث خطأ في التسجيل');
+      setErrorMsg(result.error || 'حدث خطأ أثناء إرسال طلب تسجيل السائق');
     }
   };
 
-  // Admin tab & name states
+  // Admin tab & name states for /admin-login.html
   const [adminTab, setAdminTab] = useState<'login' | 'register'>('login');
   const [adminName, setAdminName] = useState('');
 
-  // Admin Login (/admin-login.html)
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.loginAsync(identifier, password, 'admin');
     setIsLoading(false);
@@ -144,15 +180,14 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
       }
       onLoginSuccess(transitStore.getCurrentUser() || result.user);
     } else {
-      setErrorMsg(result.error || 'بيانات الدخول غير صحيحة، يرجى التأكد والمحاولة مرة أخرى');
+      setErrorMsg(result.error || 'بيانات دخول الإدارة غير صحيحة');
     }
   };
 
-  // Admin Register (/admin-login.html)
   const handleAdminRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setErrorMsg(null);
+    resetFeedback();
 
     const result = await transitStore.registerAdmin(adminName, phone, email, password);
     await transitStore.syncWithServer();
@@ -165,238 +200,7 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
     }
   };
 
-  // 1. Driver Register View
-  if (currentPath === '/driver-register.html') {
-    return (
-      <div className="max-w-2xl mx-auto py-10 px-4 sm:px-6">
-        <div className="bg-slate-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center">
-              <Bus className="w-6 h-6" />
-            </div>
-            <div>
-              <h2 className="text-xl font-black text-white">تسجيل سائق جديد لحافلات الأحساء</h2>
-              <p className="text-xs text-slate-400">انضم لأسطول حافلات واحة الأحساء وقدم خدمات النقل الذكي</p>
-            </div>
-          </div>
-
-          <div className="p-3.5 mb-6 rounded-xl bg-amber-950/40 border border-amber-800/60 text-xs text-amber-200 flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-            <span>
-              <strong>ملاحظة تنظيمية:</strong> بعد إرسال الطلب، يبقى حساب السائق الجديد بحالة <strong>معلّق (pending)</strong> حتى تتم مراجعته واعتماده من قبل الإدارة المركزية.
-            </span>
-          </div>
-
-          {successMsg && (
-            <div className="p-4 mb-6 rounded-xl bg-emerald-950/60 border border-emerald-800 text-xs text-emerald-200 flex items-center gap-2">
-              <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
-              <span>{successMsg}</span>
-            </div>
-          )}
-
-          {errorMsg && (
-            <div className="p-3.5 mb-6 rounded-xl bg-rose-950/60 border border-rose-800 text-xs text-rose-200 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleDriverRegister} className="space-y-4">
-            <div className="border-b border-slate-800 pb-3 mb-3">
-              <h3 className="text-xs font-bold text-sky-400 uppercase tracking-wider mb-3">1. البيانات الشخصية للسائق</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">الاسم الثلاثي *</label>
-                  <input
-                    type="text"
-                    required
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="مثال: صالح محمد الهاشم"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال *</label>
-                  <input
-                    type="tel"
-                    required
-                    value={phone}
-                    onChange={e => setPhone(e.target.value)}
-                    placeholder="05XXXXXXXX"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني *</label>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    placeholder="driver@hasa-bus.sa"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور *</label>
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="pt-1">
-              <h3 className="text-xs font-bold text-amber-400 uppercase tracking-wider mb-3">2. بيانات الحافلة المخصصة</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">رقم لوحة الحافلة *</label>
-                  <input
-                    type="text"
-                    required
-                    value={plateNumber}
-                    onChange={e => setPlateNumber(e.target.value)}
-                    placeholder="مثال: أ ح س 4412"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">موديل الحافلة وطرازها *</label>
-                  <input
-                    type="text"
-                    required
-                    value={model}
-                    onChange={e => setModel(e.target.value)}
-                    placeholder="مرسيدس سيتارو / هيونداي 2024"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">عدد المقاعد الإجمالي *</label>
-                  <input
-                    type="number"
-                    min="10"
-                    max="60"
-                    required
-                    value={seatsCount}
-                    onChange={e => setSeatsCount(Number(e.target.value))}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1">نوع وتجهيز الحافلة</label>
-                  <input
-                    type="text"
-                    value={busType}
-                    onChange={e => setBusType(e.target.value)}
-                    placeholder="مكيفة، كاميرات مراقبة، شاشات"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full mt-4 bg-gradient-to-r from-amber-600 to-amber-500 text-slate-950 font-bold py-3 rounded-xl hover:from-amber-500 hover:to-amber-400 transition-all shadow-lg shadow-amber-500/20 disabled:opacity-50"
-            >
-              {isLoading ? 'جاري الإرسال...' : 'إرسال طلب تسجيل السائق (Pending)'}
-            </button>
-          </form>
-
-          <div className="mt-6 text-center text-xs text-slate-400">
-            لديك حساب سائق معتمد بالفعل؟{' '}
-            <button
-              onClick={() => onNavigate('/driver-login.html')}
-              className="text-amber-400 font-bold hover:underline"
-            >
-              سجل الدخول من هنا
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 2. Driver Login View
-  if (currentPath === '/driver-login.html') {
-    return (
-      <div className="max-w-md mx-auto py-12 px-4 sm:px-6">
-        <div className="bg-slate-900 border border-amber-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl">
-          <div className="w-12 h-12 rounded-2xl bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto mb-4">
-            <Bus className="w-6 h-6" />
-          </div>
-          <h2 className="text-xl font-black text-center text-white mb-1">دخول السائقين</h2>
-          <p className="text-xs text-center text-slate-400 mb-6">لوحة متابعة رحلات وركاب حافلات الأحساء</p>
-
-          {errorMsg && (
-            <div className="p-3.5 mb-6 rounded-xl bg-rose-950/60 border border-rose-800 text-xs text-rose-200 flex items-center gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          <form onSubmit={handleDriverLogin} className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال أو البريد</label>
-              <div className="relative">
-                <input
-                  type="text"
-                  required
-                  value={identifier}
-                  onChange={e => setIdentifier(e.target.value)}
-                  placeholder="0554433221 أو fahad@driver.sa"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
-                  dir="ltr"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور</label>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-amber-500/20 disabled:opacity-50 text-sm"
-            >
-              {isLoading ? 'جاري التحقق...' : 'دخول لوحة السائق'}
-            </button>
-          </form>
-
-          <div className="mt-6 pt-4 border-t border-slate-800 text-center text-xs text-slate-400">
-            سائق جديد؟{' '}
-            <button
-              onClick={() => onNavigate('/driver-register.html')}
-              className="text-amber-400 font-bold hover:underline"
-            >
-              سجّل بياناتك وحافلتك من هنا (تتطلب موافقة الإدارة)
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // 3. Admin Login & Registration View (/admin-login.html)
+  // 1. Dedicated Admin Page (/admin-login.html)
   if (currentPath === '/admin-login.html') {
     return (
       <div className="max-w-lg mx-auto py-10 px-4 sm:px-6">
@@ -405,32 +209,29 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
             <Shield className="w-6 h-6" />
           </div>
           <h2 className="text-xl font-black text-center text-white mb-1">إدارة العمليات المركزية</h2>
-          <p className="text-xs text-center text-slate-400 mb-6">شبكة حافلات الأحساء - تسجيل ودخول مسؤولي الإدارة</p>
+          <p className="text-xs text-center text-slate-400 mb-6">شبكة وصلني في الأحساء - تسجيل ودخول مسؤولي الإدارة</p>
 
-          {/* Admin Mode Switcher Tabs */}
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-800/80 rounded-2xl border border-slate-700 mb-6">
+          <div className="flex p-1 bg-slate-800/80 rounded-xl mb-6">
             <button
-              type="button"
               onClick={() => {
                 setAdminTab('login');
-                resetForm();
+                resetFeedback();
               }}
-              className={`py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
                 adminTab === 'login'
                   ? 'bg-rose-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <LogIn className="w-3.5 h-3.5" />
-              <span>دخول حساب إدارة</span>
+              <span>دخول الإدارة</span>
             </button>
             <button
-              type="button"
               onClick={() => {
                 setAdminTab('register');
-                resetForm();
+                resetFeedback();
               }}
-              className={`py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
                 adminTab === 'register'
                   ? 'bg-rose-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
@@ -449,92 +250,83 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
           )}
 
           {adminTab === 'register' ? (
-            /* Admin Register Form with Mandatory Name Field */
-            <form onSubmit={handleAdminRegister} className="space-y-4">
-              <div className="p-3 bg-rose-950/30 border border-rose-900/50 rounded-xl text-xs text-rose-300">
-                <strong>تسجيل حساب مسؤول إدارة جديد:</strong> قم بتعبئة اسمك وبياناتك الرسمية لتسجيلها واعتمادها في لوحة التحكم المركزية.
-              </div>
-
+            <form onSubmit={handleAdminRegister} className="space-y-3.5">
               <div>
-                <label className="block text-xs font-bold text-rose-300 mb-1 flex items-center gap-1.5">
-                  <UserIcon className="w-3.5 h-3.5 text-rose-400" />
-                  <span>اسم مسؤول الإدارة الكامل * (خانة تسجيل الاسم)</span>
-                </label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">اسم مسؤول الإدارة الكامل *</label>
                 <input
                   type="text"
                   required
                   value={adminName}
                   onChange={e => setAdminName(e.target.value)}
-                  placeholder="مثال: م. فهد العبدالله (مسؤول العمليات)"
-                  className="w-full bg-slate-800 border border-rose-500/50 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-400"
+                  placeholder="مثال: م. عبدالمحسن البشير"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال الإداري *</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال *</label>
                 <input
                   type="tel"
                   required
                   value={phone}
                   onChange={e => setPhone(e.target.value)}
                   placeholder="05XXXXXXXX"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-left"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-left"
                   dir="ltr"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني الإداري *</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني الرسمي *</label>
                 <input
                   type="email"
                   required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
-                  placeholder="admin.name@hasa-bus.sa"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-left"
+                  placeholder="admin@hasa-transit.sa"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-left"
                   dir="ltr"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور المشفرة *</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور *</label>
                 <input
                   type="password"
                   required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-rose-600/20 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-rose-600/20 disabled:opacity-50 text-sm mt-2 flex items-center justify-center gap-2"
               >
                 <UserPlus className="w-4 h-4" />
                 <span>{isLoading ? 'جاري التسجيل...' : 'تسجيل حساب واعتماد اسم مسؤول الإدارة'}</span>
               </button>
             </form>
           ) : (
-            /* Admin Login Form with optional/editable name confirmation */
             <form onSubmit={handleAdminLogin} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني الإداري</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني أو رقم الجوال</label>
                 <input
-                  type="email"
+                  type="text"
                   required
                   value={identifier}
                   onChange={e => setIdentifier(e.target.value)}
-                  placeholder="admin@hasa-bus.sa"
+                  placeholder="admin@hasa-bus.sa أو 0500000001"
                   className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 text-left"
                   dir="ltr"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور المشفرة</label>
+                <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور</label>
                 <input
                   type="password"
                   required
@@ -545,54 +337,54 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1 flex items-center justify-between">
-                  <span>تأكيد / تسجيل اسم المدير في هذه الجلسة (اختياري):</span>
-                  <span className="text-[10px] text-rose-400">حفظ الاسم الرسمي</span>
-                </label>
-                <input
-                  type="text"
-                  value={adminName}
-                  onChange={e => setAdminName(e.target.value)}
-                  placeholder="أدخل اسمك لتحديثه في لوحة الإدارة..."
-                  className="w-full bg-slate-800/80 border border-slate-700 rounded-xl px-3.5 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500"
-                />
-              </div>
-
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-rose-600/20 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
+                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-rose-600/20 disabled:opacity-50 text-sm"
               >
-                <LogIn className="w-4 h-4" />
-                <span>{isLoading ? 'جاري التحقق...' : 'دخول لوحة التحكم المركزية'}</span>
+                {isLoading ? 'جاري التحقق...' : 'دخول لوحة الإدارة'}
               </button>
             </form>
           )}
+
+          <div className="mt-6 pt-4 border-t border-slate-800 text-center text-xs text-slate-400">
+            الرجوع إلى{' '}
+            <button
+              onClick={() => onNavigate('/')}
+              className="text-sky-400 font-bold hover:underline"
+            >
+              الصفحة الرئيسية وحسابات الركاب والسائقين
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  // 4. Default Home View: Passenger Register / General Login + Announcement
+  // 2. Unified Registration & Login View for Both Passenger and Driver on the SAME page
   return (
-    <div className="max-w-4xl mx-auto py-8 px-4 sm:px-6">
-      {/* General Announcement from Admin */}
-      {announcement.active && announcement.text && (
-        <div className="mb-8 p-4 rounded-2xl bg-gradient-to-r from-sky-950/80 via-slate-900 to-teal-950/80 border border-sky-500/40 shadow-xl flex items-center gap-3.5">
-          <div className="w-10 h-10 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center shrink-0">
-            <Sparkles className="w-5 h-5 animate-pulse" />
+    <div className="max-w-7xl mx-auto py-8 px-4 sm:px-6 lg:px-8">
+      {/* Realtime Announcement Banner */}
+      {announcement?.active && (
+        <div className="mb-8 p-4 rounded-2xl bg-gradient-to-r from-amber-500/20 via-sky-500/20 to-emerald-500/20 border border-amber-500/30 text-amber-200 text-xs sm:text-sm flex items-center justify-between gap-3 shadow-lg">
+          <div className="flex items-center gap-3">
+            <span className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+              <Sparkles className="w-5 h-5" />
+            </span>
+            <div>
+              <span className="font-bold text-white ml-2">إعلان هام:</span>
+              <span>{announcement.text}</span>
+            </div>
           </div>
-          <div className="flex-1">
-            <div className="text-xs font-bold text-sky-400 mb-0.5">إعلان عام للركاب والجمهور</div>
-            <p className="text-sm text-slate-200 font-medium leading-relaxed">{announcement.text}</p>
-          </div>
+          <span className="text-[10px] text-slate-400 shrink-0 font-mono">
+            {new Date(announcement.publishedAt).toLocaleDateString('ar-SA')}
+          </span>
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
         {/* Left Hero side */}
-        <div className="md:col-span-6 space-y-4 text-right">
+        <div className="md:col-span-5 lg:col-span-6 space-y-4 text-right pt-2">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-950/70 border border-sky-800/60 text-sky-400 text-xs font-semibold">
             <Bus className="w-3.5 h-3.5" />
             <span>نظام النقل الترددي الأحدث في واحة الأحساء</span>
@@ -603,63 +395,136 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
           </h1>
 
           <p className="text-sm text-slate-300 leading-relaxed">
-            احجز مقعدك بضغطة زر من جامعة الملك فيصل ومحطة القطار وسوق القيصرية وجبل القارة والمبرز ومطار الأحساء. أسعار تبدأ من 4 إلى 8 ريال كحد أقصى مع تتبع حي للحافلات.
+            منصة موحدة لحجز مقاعد الركاب ولتسجيل وانطلاق سائقي الحافلات. تنقل بسهولة بين جامعة الملك فيصل ومحطة قطار سار وسوق القيصرية وجبل القارة والمبرز ومطار الأحساء، مع تتبع حي ومباشر للحافلات عبر الأجهزة.
           </p>
 
           <div className="pt-2 grid grid-cols-2 gap-3 text-xs">
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <div className="font-bold text-sky-400 mb-1">تتبع مباشر 10s</div>
-              <div className="text-slate-400">مواقع الحافلات محدثة لحظياً كل 10 ثواني</div>
+            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800">
+              <div className="font-bold text-sky-400 mb-1 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                <span>تتبع GPS حي ومباشر</span>
+              </div>
+              <div className="text-slate-400">تحديث فوري لموقع الحافلة الفعلي عبر Supabase</div>
             </div>
-            <div className="p-3 rounded-xl bg-slate-900/80 border border-slate-800">
-              <div className="font-bold text-emerald-400 mb-1">سقف السعر 8 ريال</div>
-              <div className="text-slate-400">أسعار مدعومة لجميع أهالي وزوار الواحة</div>
+            <div className="p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800">
+              <div className="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                <span>تسجيل موحد للسائق والراكب</span>
+              </div>
+              <div className="text-slate-400">من نفس الصفحة بضغطة زر واحدة بكل سهولة</div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 space-y-2 text-xs text-slate-400">
+            <div className="font-bold text-white text-xs flex items-center gap-1.5">
+              <Bus className="w-4 h-4 text-amber-400" />
+              <span>مسارات الأحساء المعتمدة:</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-[11px]">
+              <span className="px-2 py-0.5 rounded-md bg-slate-800 text-sky-300 border border-slate-700">مسار 101: الهفوف - المبرز</span>
+              <span className="px-2 py-0.5 rounded-md bg-slate-800 text-emerald-300 border border-slate-700">مسار 102: جامعة الملك فيصل</span>
+              <span className="px-2 py-0.5 rounded-md bg-slate-800 text-purple-300 border border-slate-700">مسار 103: سار - المطار</span>
+              <span className="px-2 py-0.5 rounded-md bg-slate-800 text-amber-300 border border-slate-700">مسار 104: جبل القارة</span>
             </div>
           </div>
         </div>
 
-        {/* Right Form Card: Passenger Login & Register */}
-        <div className="md:col-span-6 bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
-          {/* Segmented control tabs */}
+        {/* Right Form Card: Unified Passenger & Driver Register and Login */}
+        <div className="md:col-span-7 lg:col-span-6 bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl">
+          {/* 1. Primary Role Switcher: Passenger vs Driver */}
+          <div className="mb-4">
+            <label className="block text-[11px] font-bold text-slate-400 mb-2">نوع الحساب:</label>
+            <div className="grid grid-cols-2 gap-2 p-1.5 bg-slate-950/80 rounded-2xl border border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthRole('passenger');
+                  resetFeedback();
+                }}
+                className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${
+                  authRole === 'passenger'
+                    ? 'bg-sky-600 text-white shadow-lg shadow-sky-600/30 ring-2 ring-sky-400/30'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <UserIcon className="w-4 h-4" />
+                <span>👤 أنا راكب (Passenger)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthRole('driver');
+                  resetFeedback();
+                }}
+                className={`py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-2 ${
+                  authRole === 'driver'
+                    ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/30 ring-2 ring-amber-300'
+                    : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                }`}
+              >
+                <Bus className="w-4 h-4" />
+                <span>🚌 أنا كابتن حافلة (Driver)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 2. Secondary Tab Switcher: Login vs Register */}
           <div className="flex p-1 bg-slate-800/80 rounded-xl mb-6">
             <button
+              type="button"
               onClick={() => {
-                setPassengerTab('login');
-                resetForm();
+                setAuthTab('login');
+                resetFeedback();
               }}
               className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                passengerTab === 'login'
-                  ? 'bg-sky-600 text-white shadow-md'
+                authTab === 'login'
+                  ? authRole === 'driver'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'bg-sky-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <LogIn className="w-3.5 h-3.5" />
-              <span>دخول عام</span>
+              <span>{authRole === 'driver' ? 'دخول السائق' : 'دخول الراكب'}</span>
             </button>
+
             <button
+              type="button"
               onClick={() => {
-                setPassengerTab('register');
-                resetForm();
+                setAuthTab('register');
+                resetFeedback();
               }}
               className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 ${
-                passengerTab === 'register'
-                  ? 'bg-sky-600 text-white shadow-md'
+                authTab === 'register'
+                  ? authRole === 'driver'
+                    ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                    : 'bg-sky-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <UserPlus className="w-3.5 h-3.5" />
-              <span>تسجيل راكب جديد</span>
+              <span>{authRole === 'driver' ? 'تسجيل سائق جديد' : 'تسجيل راكب جديد'}</span>
             </button>
           </div>
 
+          {/* Feedback Messages */}
           {errorMsg && (
-            <div className="p-3 mb-5 rounded-xl bg-rose-950/60 border border-rose-800 text-xs text-rose-200 flex items-center gap-2">
+            <div className="p-3.5 mb-5 rounded-xl bg-rose-950/60 border border-rose-800 text-xs text-rose-200 flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
               <span>{errorMsg}</span>
             </div>
           )}
 
-          {passengerTab === 'login' ? (
+          {successMsg && (
+            <div className="p-3.5 mb-5 rounded-xl bg-emerald-950/60 border border-emerald-800 text-xs text-emerald-200 flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{successMsg}</span>
+            </div>
+          )}
+
+          {/* =================== PASSENGER VIEWS =================== */}
+          {authRole === 'passenger' && authTab === 'login' && (
             <form onSubmit={handlePassengerLogin} className="space-y-4">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال أو البريد</label>
@@ -691,12 +556,15 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-sky-600/20 disabled:opacity-50 text-sm"
+                className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-sky-600/20 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
               >
-                {isLoading ? 'جاري التحقق...' : 'دخول للوحة الراكب'}
+                <LogIn className="w-4 h-4" />
+                <span>{isLoading ? 'جاري التحقق...' : 'دخول للوحة الراكب'}</span>
               </button>
             </form>
-          ) : (
+          )}
+
+          {authRole === 'passenger' && authTab === 'register' && (
             <form onSubmit={handlePassengerRegister} className="space-y-3.5">
               <div>
                 <label className="block text-xs font-medium text-slate-300 mb-1">الاسم الكامل *</label>
@@ -750,43 +618,203 @@ export const AuthForms: React.FC<AuthFormsProps> = ({
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-sky-600/20 disabled:opacity-50 text-sm mt-2"
+                className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-sky-600/20 disabled:opacity-50 text-sm mt-2 flex items-center justify-center gap-2"
               >
-                {isLoading ? 'جاري التسجيل...' : 'تسجيل حساب راكب جديد'}
+                <UserPlus className="w-4 h-4" />
+                <span>{isLoading ? 'جاري التسجيل...' : 'تسجيل حساب راكب جديد'}</span>
               </button>
             </form>
           )}
 
-          {/* Driver Registration Quick Box for Mobile & Desktop */}
-          <div className="mt-6 pt-5 border-t border-slate-800 space-y-2.5">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
-                <Bus className="w-4 h-4" />
-                <span>سائق حافلة جديد بالأحساء؟</span>
-              </span>
-              <span className="text-[10px] text-slate-500 bg-slate-800/80 px-2 py-0.5 rounded-full border border-slate-700">تتطلب اعتماد الإدارة</span>
-            </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              سجّل بياناتك وبيانات حافلتك للانضمام إلى أسطول النقل الترددي وإطلاق رحلاتك للركاب.
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+          {/* =================== DRIVER VIEWS =================== */}
+          {authRole === 'driver' && authTab === 'login' && (
+            <form onSubmit={handleDriverLogin} className="space-y-4">
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-center gap-2">
+                <Bus className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>دخول كباتن وسائقي "وصلني في الأحساء" المعتمدين من الإدارة</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال أو البريد</label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    required
+                    value={identifier}
+                    onChange={e => setIdentifier(e.target.value)}
+                    placeholder="0554433221 أو fahad@driver.sa"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
+                    dir="ltr"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور</label>
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
               <button
-                type="button"
-                onClick={() => onNavigate('/driver-register.html')}
-                className="w-full py-2.5 px-3 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                type="submit"
+                disabled={isLoading}
+                className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-amber-500/20 disabled:opacity-50 text-sm flex items-center justify-center gap-2"
               >
-                <UserPlus className="w-3.5 h-3.5" />
-                <span>تسجيل سائق جديد وبيانات الحافلة</span>
+                <LogIn className="w-4 h-4" />
+                <span>{isLoading ? 'جاري التحقق...' : 'دخول لوحة السائق'}</span>
               </button>
+            </form>
+          )}
+
+          {authRole === 'driver' && authTab === 'register' && (
+            <form onSubmit={handleDriverRegister} className="space-y-3.5">
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <span>
+                  <strong>ملاحظة تنظيمية:</strong> بعد إرسال الطلب، يبقى حساب السائق قيد المراجعة <strong>(معلّق - pending)</strong> حتى توافق عليه الإدارة وتعتمد الحافلة.
+                </span>
+              </div>
+
+              <div className="border-b border-slate-800 pb-2 mb-2">
+                <h4 className="text-xs font-bold text-sky-400 mb-2">1. بيانات السائق الشخصية</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">الاسم الثلاثي *</label>
+                    <input
+                      type="text"
+                      required
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="مثال: صالح محمد الهاشم"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">رقم الجوال *</label>
+                    <input
+                      type="tel"
+                      required
+                      value={phone}
+                      onChange={e => setPhone(e.target.value)}
+                      placeholder="05XXXXXXXX"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">البريد الإلكتروني *</label>
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="driver@hasa-bus.sa"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">كلمة المرور *</label>
+                    <input
+                      type="password"
+                      required
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-xs font-bold text-amber-400 mb-2">2. بيانات الحافلة المخصصة</h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">رقم لوحة الحافلة *</label>
+                    <input
+                      type="text"
+                      required
+                      value={plateNumber}
+                      onChange={e => setPlateNumber(e.target.value)}
+                      placeholder="مثال: أ ح س 4022"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">موديل الحافلة والمصنع *</label>
+                    <input
+                      type="text"
+                      required
+                      value={model}
+                      onChange={e => setModel(e.target.value)}
+                      placeholder="مثال: مرسيدس توريزمو 2024"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">سعة المقاعد *</label>
+                    <input
+                      type="number"
+                      required
+                      min={10}
+                      max={60}
+                      value={seatsCount}
+                      onChange={e => setSeatsCount(Number(e.target.value))}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500 text-left"
+                      dir="ltr"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">نوع الحافلة</label>
+                    <select
+                      value={busType}
+                      onChange={e => setBusType(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+                    >
+                      <option value="حافلة نقل جماعي مكيفة">حافلة نقل جماعي مكيفة (عادية)</option>
+                      <option value="حافلة كبار الشخصيات VIP">حافلة فاخرة VIP</option>
+                      <option value="حافلة كهربائية صديقة للبيئة">حافلة كهربائية صديقة للبيئة</option>
+                      <option value="ميني باص تردد سريع">ميني باص تردد سريع</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
               <button
-                type="button"
-                onClick={() => onNavigate('/driver-login.html')}
-                className="w-full py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold border border-slate-700 transition-all flex items-center justify-center gap-1.5"
+                type="submit"
+                disabled={isLoading}
+                className="w-full bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black py-2.5 rounded-xl transition-all shadow-lg shadow-amber-500/20 disabled:opacity-50 text-sm mt-2 flex items-center justify-center gap-2"
               >
-                <LogIn className="w-3.5 h-3.5 text-amber-400" />
-                <span>دخول السائق</span>
+                <UserPlus className="w-4 h-4" />
+                <span>{isLoading ? 'جاري الإرسال...' : 'إرسال طلب تسجيل السائق (Pending)'}</span>
               </button>
-            </div>
+            </form>
+          )}
+
+          {/* Quick link to admin operations */}
+          <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center justify-between text-xs text-slate-500">
+            <span>مسؤولو إدارة العمليات:</span>
+            <button
+              type="button"
+              onClick={() => onNavigate('/admin-login.html')}
+              className="text-rose-400 hover:text-rose-300 font-bold flex items-center gap-1 hover:underline"
+            >
+              <Shield className="w-3.5 h-3.5" />
+              <span>دخول الإدارة (/admin-login.html)</span>
+            </button>
           </div>
         </div>
       </div>

@@ -412,7 +412,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span>لوحة الإدارة المركزية (/admin-login.html)</span>
           </div>
           <h2 className="text-2xl font-black text-white">
-            إدارة شبكة حافلات الأحساء
+            إدارة شبكة وصلني في الأحساء
           </h2>
           <div className="flex flex-wrap items-center gap-2 mt-1.5 text-xs">
             <span className="text-slate-400 font-medium">مسؤول الإدارة المسجل:</span>

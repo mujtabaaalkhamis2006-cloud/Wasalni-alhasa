@@ -115,7 +115,7 @@ export default function App() {
       <footer className="bg-slate-900/60 border-t border-slate-800/80 py-6 px-4 text-center text-xs text-slate-500">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-bold text-slate-300">حافلات الأحساء © 2026</span>
+            <span className="font-bold text-slate-300">وصلني في الأحساء © 2026</span>
             <span>·</span>
             <span>نظام النقل الترددي العام</span>
             <span>·</span>
