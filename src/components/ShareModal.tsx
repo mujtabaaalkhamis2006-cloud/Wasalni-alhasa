@@ -25,6 +25,7 @@ import {
   setSavedShareUrl,
   getSavedApkUrl,
   setSavedApkUrl,
+  syncLinksWithRemote,
   PRIMARY_STUDIO_URL
 } from '../utils/urlConfig';
 import { User } from '../types/transit';
@@ -73,15 +74,23 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const apkInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (isOpen) {
+      syncLinksWithRemote();
+      setActiveUrl(sharedUrl || getSavedShareUrl());
+      setApkUrl(getSavedApkUrl());
+    }
+  }, [isOpen, sharedUrl]);
+
+  useEffect(() => {
     const handleUrlUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
-      if (customEvent.detail) {
+      if (typeof customEvent.detail === 'string') {
         setActiveUrl(customEvent.detail);
       }
     };
     const handleApkUrlUpdate = (e: Event) => {
       const customEvent = e as CustomEvent<string>;
-      if (customEvent.detail) {
+      if (typeof customEvent.detail === 'string') {
         setApkUrl(customEvent.detail);
       }
     };
@@ -89,9 +98,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     window.addEventListener('alahsa_url_updated', handleUrlUpdate);
     window.addEventListener('alahsa_apk_url_updated', handleApkUrlUpdate);
 
-    // Subscribe to store updates for role changes
+    // Subscribe to store updates for role changes and remote state updates
     const unsub = transitStore.subscribe(() => {
       setStoreUser(transitStore.getCurrentUser());
+      setActiveUrl(getSavedShareUrl());
+      setApkUrl(getSavedApkUrl());
     });
 
     return () => {

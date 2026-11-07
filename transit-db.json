@@ -294,5 +294,8 @@
   "driverLocations": {},
   "deletedUserIds": [],
   "deletedTripIds": [],
-  "deletedBookingIds": []
+  "deletedBookingIds": [],
+  "shareUrl": "https://al-ahsa-buses-transit.ai.studio",
+  "apkUrl": "",
+  "linksUpdatedAt": "2026-11-07T12:45:57.650Z"
 }

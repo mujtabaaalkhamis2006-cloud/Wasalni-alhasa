@@ -50,6 +50,8 @@ interface StoredData {
   tickets: SupportTicket[];
   announcement: Announcement;
   passwords: Record<string, string>; // Secured passwords
+  shareUrl?: string;
+  apkUrl?: string;
   deletedUserIds?: string[];
   deletedTripIds?: string[];
   deletedBookingIds?: string[];
@@ -360,6 +362,13 @@ class TransitStore {
             }
           }
 
+          // 2b. Live App Links Update (Share URL & APK URL)
+          else if (topic === 'al-ahsa-transit/v5/links') {
+            if (payload && payload.senderSessionId !== this.sessionId) {
+              this.applyRemoteAppLinks(payload.shareUrl, payload.apkUrl);
+            }
+          }
+
           // 3. Live Presence Heartbeat
           else if (topic === 'al-ahsa-transit/v5/presence') {
             if (payload.sessionId && payload.sessionId !== this.sessionId) {
@@ -598,6 +607,13 @@ class TransitStore {
         if (payload?.state) {
           const changed = this.mergeRemoteState(payload.state);
           if (changed) this.notify();
+        }
+      });
+
+      // 2b. Realtime Broadcast: App Links Update (Share URL & APK URL)
+      channel.on('broadcast', { event: 'links_update' }, ({ payload }: { payload: any }) => {
+        if (payload && payload.senderSessionId !== this.sessionId) {
+          this.applyRemoteAppLinks(payload.shareUrl, payload.apkUrl);
         }
       });
 
@@ -890,6 +906,15 @@ class TransitStore {
           if (Array.isArray(presence)) {
             this.activePresence = presence;
             this.notify();
+          }
+        } catch {}
+      });
+
+      this.sseEventSource.addEventListener('links', (e: MessageEvent) => {
+        try {
+          const links = JSON.parse(e.data);
+          if (links) {
+            this.applyRemoteAppLinks(links.shareUrl, links.apkUrl);
           }
         } catch {}
       });
@@ -1448,6 +1473,34 @@ class TransitStore {
     const mergedTickets = serverData.tickets || this.data.tickets;
     const mergedAnnouncement = serverData.announcement || this.data.announcement;
 
+    // Merge App Links across devices (Share URL & APK URL)
+    if (typeof serverData.shareUrl === 'string' && serverData.shareUrl.trim()) {
+      const cleanShare = serverData.shareUrl.trim();
+      if (this.data.shareUrl !== cleanShare) {
+        this.data.shareUrl = cleanShare;
+        hasChanges = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_share_url', cleanShare);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_url_updated', { detail: cleanShare }));
+      }
+    }
+    if (typeof serverData.apkUrl === 'string') {
+      const cleanApk = serverData.apkUrl.trim();
+      if (this.data.apkUrl !== cleanApk) {
+        this.data.apkUrl = cleanApk;
+        hasChanges = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_apk_url', cleanApk);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_apk_url_updated', { detail: cleanApk }));
+      }
+    }
+
     if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length) {
       this.data = {
         ...this.data,
@@ -1457,6 +1510,8 @@ class TransitStore {
         bookings: mergedBookings,
         tickets: mergedTickets,
         announcement: mergedAnnouncement,
+        shareUrl: this.data.shareUrl,
+        apkUrl: this.data.apkUrl,
         deletedUserIds: Array.from(tombstoneUsers),
         deletedTripIds: Array.from(tombstoneTrips),
         deletedBookingIds: Array.from(tombstoneBookings)
@@ -1503,6 +1558,17 @@ class TransitStore {
             if (changed) {
               this.notify();
             }
+          }
+        }
+      } catch {}
+
+      // 3. Sync App Links directly from server for instant secondary-device update
+      try {
+        const linksRes = await fetch(`${this.getApiBaseUrl()}/api/transit/links`);
+        if (linksRes.ok) {
+          const linksJson = await linksRes.json();
+          if (linksJson.success) {
+            this.applyRemoteAppLinks(linksJson.shareUrl, linksJson.apkUrl);
           }
         }
       } catch {}
@@ -3005,6 +3071,124 @@ class TransitStore {
     return this.data.trips;
   }
 
+  // --- Real-time Cross-Device App Links Synchronization ---
+  public getAppLinks(): { shareUrl?: string; apkUrl?: string } {
+    return {
+      shareUrl: this.data.shareUrl,
+      apkUrl: this.data.apkUrl
+    };
+  }
+
+  public async updateAppLinks(links: { shareUrl?: string; apkUrl?: string }) {
+    let changed = false;
+    if (typeof links.shareUrl === 'string') {
+      const cleanShare = links.shareUrl.trim();
+      if (cleanShare !== this.data.shareUrl) {
+        this.data.shareUrl = cleanShare;
+        changed = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_share_url', cleanShare);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_url_updated', { detail: cleanShare }));
+      }
+    }
+    if (typeof links.apkUrl === 'string') {
+      const cleanApk = links.apkUrl.trim();
+      if (cleanApk !== this.data.apkUrl) {
+        this.data.apkUrl = cleanApk;
+        changed = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_apk_url', cleanApk);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_apk_url_updated', { detail: cleanApk }));
+      }
+    }
+
+    if (changed) {
+      this.saveData(this.data);
+
+      // 1. Send to Express Server for multi-device broadcast
+      try {
+        await fetch(`${this.getApiBaseUrl()}/api/transit/links`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            shareUrl: this.data.shareUrl,
+            apkUrl: this.data.apkUrl
+          })
+        });
+      } catch {}
+
+      // 2. Broadcast via Supabase Realtime
+      if (this.supabaseChannel) {
+        try {
+          this.supabaseChannel.send({
+            type: 'broadcast',
+            event: 'links_update',
+            payload: {
+              shareUrl: this.data.shareUrl,
+              apkUrl: this.data.apkUrl,
+              senderSessionId: this.sessionId
+            }
+          });
+        } catch {}
+      }
+
+      // 3. Publish to MQTT topic for cross-device instant sync
+      this.publishMqtt('al-ahsa-transit/v5/links', {
+        shareUrl: this.data.shareUrl,
+        apkUrl: this.data.apkUrl,
+        senderSessionId: this.sessionId,
+        timestamp: Date.now()
+      });
+
+      // 4. Save to Supabase DB snapshot
+      saveStateToSupabaseDb(this.data);
+      this.broadcastStateToSupabase(this.data);
+    }
+  }
+
+  public applyRemoteAppLinks(shareUrl?: string, apkUrl?: string): boolean {
+    let changed = false;
+    if (typeof shareUrl === 'string' && shareUrl.trim()) {
+      const clean = shareUrl.trim();
+      if (clean !== this.data.shareUrl) {
+        this.data.shareUrl = clean;
+        changed = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_share_url', clean);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_url_updated', { detail: clean }));
+      }
+    }
+    if (typeof apkUrl === 'string') {
+      const clean = apkUrl.trim();
+      if (clean !== this.data.apkUrl) {
+        this.data.apkUrl = clean;
+        changed = true;
+      }
+      try {
+        localStorage.setItem('alahsa_transit_apk_url', clean);
+      } catch {}
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('alahsa_apk_url_updated', { detail: clean }));
+      }
+    }
+    if (changed) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+      } catch {}
+      this.notify();
+    }
+    return changed;
+  }
+
   public resetToDefault() {
     localStorage.removeItem(STORAGE_KEY);
     this.data = this.loadData();
@@ -3013,3 +3197,6 @@ class TransitStore {
 }
 
 export const transitStore = new TransitStore();
+if (typeof window !== 'undefined') {
+  (window as any).__transitStore = transitStore;
+}

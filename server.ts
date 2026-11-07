@@ -270,6 +270,57 @@ app.get('/api/transit/state', (_req: Request, res: Response) => {
   res.json({ success: true, data: serverTransitData, activePresence: getActivePresenceList() });
 });
 
+// Shared App Links for Instant Cross-Device Sync (Web Share Link & APK Download Link)
+app.get('/api/transit/links', (_req: Request, res: Response) => {
+  if (!serverTransitData) {
+    serverTransitData = getTransitData();
+  }
+  return res.json({
+    success: true,
+    shareUrl: serverTransitData?.shareUrl || 'https://al-ahsa-buses-transit.ai.studio',
+    apkUrl: serverTransitData?.apkUrl || '',
+    updatedAt: serverTransitData?.linksUpdatedAt || new Date().toISOString()
+  });
+});
+
+app.post('/api/transit/links', (req: Request, res: Response) => {
+  try {
+    const { shareUrl, apkUrl } = req.body;
+    if (!serverTransitData) serverTransitData = getTransitData();
+    if (!serverTransitData) return res.status(500).json({ error: 'DB unavailable' });
+
+    let changed = false;
+    if (typeof shareUrl === 'string' && shareUrl.trim() !== serverTransitData.shareUrl) {
+      serverTransitData.shareUrl = shareUrl.trim();
+      changed = true;
+    }
+    if (typeof apkUrl === 'string' && apkUrl.trim() !== serverTransitData.apkUrl) {
+      serverTransitData.apkUrl = apkUrl.trim();
+      changed = true;
+    }
+
+    if (changed || !serverTransitData.linksUpdatedAt) {
+      serverTransitData.linksUpdatedAt = new Date().toISOString();
+      saveTransitDataToFile();
+      broadcastSseEvent('links', {
+        shareUrl: serverTransitData.shareUrl || '',
+        apkUrl: serverTransitData.apkUrl || '',
+        updatedAt: serverTransitData.linksUpdatedAt
+      });
+      broadcastSseEvent('state', serverTransitData);
+    }
+
+    return res.json({
+      success: true,
+      shareUrl: serverTransitData.shareUrl || '',
+      apkUrl: serverTransitData.apkUrl || '',
+      updatedAt: serverTransitData.linksUpdatedAt
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // Authoritative Multi-Device Login Endpoint
 app.post('/api/transit/login', (req: Request, res: Response) => {
   try {
@@ -736,8 +787,30 @@ app.post('/api/transit/state', (req: Request, res: Response) => {
         serverTransitData.announcement = incomingData.announcement;
       }
 
+      if (typeof incomingData.shareUrl === 'string' && incomingData.shareUrl.trim()) {
+        serverTransitData.shareUrl = incomingData.shareUrl.trim();
+      }
+      if (typeof incomingData.apkUrl === 'string') {
+        serverTransitData.apkUrl = incomingData.apkUrl.trim();
+      }
+      if (incomingData.appLinks) {
+        if (typeof incomingData.appLinks.shareUrl === 'string' && incomingData.appLinks.shareUrl.trim()) {
+          serverTransitData.shareUrl = incomingData.appLinks.shareUrl.trim();
+        }
+        if (typeof incomingData.appLinks.apkUrl === 'string') {
+          serverTransitData.apkUrl = incomingData.appLinks.apkUrl.trim();
+        }
+      }
+
       saveTransitDataToFile();
       broadcastSseEvent('state', serverTransitData);
+      if (serverTransitData.shareUrl || serverTransitData.apkUrl) {
+        broadcastSseEvent('links', {
+          shareUrl: serverTransitData.shareUrl || '',
+          apkUrl: serverTransitData.apkUrl || '',
+          updatedAt: new Date().toISOString()
+        });
+      }
       return res.json({ success: true, data: serverTransitData });
     }
     return res.status(400).json({ error: 'Invalid state format' });
