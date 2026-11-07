@@ -1,23 +1,76 @@
-import React, { useState, useEffect } from 'react';
-import { Share2, Copy, Check, MessageCircle, Send, QrCode, X, ExternalLink, Edit2, Globe, Save, RefreshCw, Smartphone } from 'lucide-react';
-import { getSavedShareUrl, setSavedShareUrl, PRIMARY_STUDIO_URL } from '../utils/urlConfig';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Share2,
+  Copy,
+  Check,
+  MessageCircle,
+  Send,
+  QrCode,
+  X,
+  ExternalLink,
+  Edit2,
+  Globe,
+  Save,
+  RefreshCw,
+  Smartphone,
+  Download,
+  AlertCircle,
+  Lock,
+  Unlock,
+  ShieldCheck,
+  KeyRound
+} from 'lucide-react';
+import {
+  getSavedShareUrl,
+  setSavedShareUrl,
+  getSavedApkUrl,
+  setSavedApkUrl,
+  PRIMARY_STUDIO_URL
+} from '../utils/urlConfig';
+import { User } from '../types/transit';
+import { transitStore } from '../services/transitStore';
 
 interface ShareModalProps {
   isOpen: boolean;
   onClose: () => void;
   sharedUrl?: string;
+  currentUser?: User | null;
 }
 
 export const ShareModal: React.FC<ShareModalProps> = ({
   isOpen,
   onClose,
-  sharedUrl
+  sharedUrl,
+  currentUser
 }) => {
-  const currentBrowserOrigin = typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+  const currentBrowserOrigin =
+    typeof window !== 'undefined' && window.location.origin ? window.location.origin : '';
+
+  // Track user & admin state
+  const [storeUser, setStoreUser] = useState<User | null>(() => transitStore.getCurrentUser());
+  const [adminUnlockedSession, setAdminUnlockedSession] = useState(false);
+  const [showAdminAuthModal, setShowAdminAuthModal] = useState(false);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminAuthError, setAdminAuthError] = useState<string | null>(null);
+
+  const effectiveUser = currentUser || storeUser;
+  const isLoggedAdmin = effectiveUser?.role === 'admin';
+  const canEditApk = isLoggedAdmin || adminUnlockedSession;
+
+  // Web Share URL state
   const [activeUrl, setActiveUrl] = useState<string>(() => sharedUrl || getSavedShareUrl());
   const [isEditingUrl, setIsEditingUrl] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // APK Download URL state (Only Admin can edit)
+  const [apkUrl, setApkUrl] = useState<string>(() => getSavedApkUrl());
+  const [isEditingApkUrl, setIsEditingApkUrl] = useState<boolean>(false);
+  const [copiedApk, setCopiedApk] = useState(false);
+  const [saveApkSuccess, setSaveApkSuccess] = useState(false);
+  const [apkError, setApkError] = useState<string | null>(null);
+
+  const apkInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleUrlUpdate = (e: Event) => {
@@ -26,16 +79,53 @@ export const ShareModal: React.FC<ShareModalProps> = ({
         setActiveUrl(customEvent.detail);
       }
     };
+    const handleApkUrlUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail) {
+        setApkUrl(customEvent.detail);
+      }
+    };
+
     window.addEventListener('alahsa_url_updated', handleUrlUpdate);
-    return () => window.removeEventListener('alahsa_url_updated', handleUrlUpdate);
+    window.addEventListener('alahsa_apk_url_updated', handleApkUrlUpdate);
+
+    // Subscribe to store updates for role changes
+    const unsub = transitStore.subscribe(() => {
+      setStoreUser(transitStore.getCurrentUser());
+    });
+
+    return () => {
+      window.removeEventListener('alahsa_url_updated', handleUrlUpdate);
+      window.removeEventListener('alahsa_apk_url_updated', handleApkUrlUpdate);
+      unsub();
+    };
   }, []);
+
+  // Admin Verification Handler
+  const handleVerifyAdmin = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const pin = adminPasswordInput.trim();
+    if (pin === '123456' || pin === 'admin123' || pin === 'admin') {
+      setAdminUnlockedSession(true);
+      setShowAdminAuthModal(false);
+      setIsEditingApkUrl(true);
+      setAdminAuthError(null);
+      setAdminPasswordInput('');
+      setTimeout(() => apkInputRef.current?.focus(), 100);
+    } else {
+      setAdminAuthError('كلمة مرور الإدارة غير صحيحة، يرجى المحاولة مجدداً.');
+    }
+  };
 
   if (!isOpen) return null;
 
   const appTitle = 'وصلني في الأحساء | تطبيق النقل وحجز الرحلات';
   const shareText = `🚌 تطبيق "وصلني في الأحساء" للنقل العام والذكي\nاحجز مقعدك وتتبع مسار الحافلة ومواعيد الرحلات مباشرة في الأحساء (الهفوف، المبرز، جامعة الملك فيصل، محطة سار):`;
-  const fullShareMessage = `${shareText}\n${activeUrl}`;
+  const fullShareMessage = apkUrl.trim()
+    ? `${shareText}\n${activeUrl}\n\nرابط تحميل APK المباشر:\n${apkUrl}`
+    : `${shareText}\n${activeUrl}`;
 
+  // Save Web URL
   const handleSaveUrl = (urlToSave: string) => {
     const trimmed = urlToSave.trim();
     if (trimmed) {
@@ -47,24 +137,59 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     }
   };
 
-  const handleCopy = () => {
+  // Save APK URL
+  const handleSaveApkUrl = (urlToSave: string) => {
+    const trimmed = urlToSave.trim();
+    if (trimmed) {
+      setApkUrl(trimmed);
+      setSavedApkUrl(trimmed);
+      setIsEditingApkUrl(false);
+      setSaveApkSuccess(true);
+      setApkError(null);
+      setTimeout(() => setSaveApkSuccess(false), 2500);
+    } else {
+      setApkUrl('');
+      setSavedApkUrl('');
+      setIsEditingApkUrl(true);
+    }
+  };
+
+  const copyToClipboard = (text: string, onDone: () => void) => {
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(activeUrl);
+        navigator.clipboard.writeText(text);
       } else {
         const textArea = document.createElement('textarea');
-        textArea.value = activeUrl;
+        textArea.value = text;
         document.body.appendChild(textArea);
         textArea.select();
         document.execCommand('copy');
         document.body.removeChild(textArea);
       }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2500);
+      onDone();
     } catch {
+      onDone();
+    }
+  };
+
+  const handleCopyWebUrl = () => {
+    copyToClipboard(activeUrl, () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
+    });
+  };
+
+  const handleCopyApkUrl = () => {
+    if (!apkUrl.trim()) {
+      setIsEditingApkUrl(true);
+      setApkError('يرجى وضع رابط التحميل أولاً ثم الضغط على حفظ');
+      apkInputRef.current?.focus();
+      return;
     }
+    copyToClipboard(apkUrl, () => {
+      setCopiedApk(true);
+      setTimeout(() => setCopiedApk(false), 2500);
+    });
   };
 
   const handleNativeShare = async () => {
@@ -76,10 +201,10 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           url: activeUrl
         });
       } catch {
-        // User cancelled or not supported
+        // user cancelled
       }
     } else {
-      handleCopy();
+      handleCopyWebUrl();
     }
   };
 
@@ -102,7 +227,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-black text-white">مشاركة تطبيق وصلني في الأحساء</h3>
-              <p className="text-xs text-slate-400">شارك الرابط مع الركاب أو السائقين لفتح التطبيق مباشرة</p>
+              <p className="text-xs text-slate-400">شارك الرابط مع الركاب أو السائقين أو ضع رابط تحميل ملف الـ APK المباشر</p>
             </div>
           </div>
           <button
@@ -113,12 +238,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </button>
         </div>
 
-        {/* Share Link Box with Edit & Copy */}
+        {/* 1. SECTION: Web App Link Box (Just like before, editable by user) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
               <Globe className="w-4 h-4 text-sky-400" />
-              <span>رابط التطبيق:</span>
+              <span>رابط المنصة والموقع (Web):</span>
             </label>
             <div className="flex items-center gap-2">
               {saveSuccess && (
@@ -166,7 +291,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               </button>
             ) : (
               <button
-                onClick={handleCopy}
+                onClick={handleCopyWebUrl}
                 className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shrink-0 ${
                   copied
                     ? 'bg-emerald-600 text-white'
@@ -179,7 +304,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             )}
           </div>
 
-          {/* Quick Actions & Direct Test Link */}
+          {/* Quick Actions */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
             <div className="flex items-center gap-2">
               <button
@@ -206,15 +331,247 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               href={activeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-bold underline"
+              className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-bold underline mr-auto"
             >
-              <span>فتح الرابط في صفحة جديدة</span>
+              <span>فتح الموقع في صفحة جديدة</span>
               <ExternalLink className="w-3.5 h-3.5" />
             </a>
           </div>
         </div>
 
-        {/* Quick Social Share Buttons */}
+        {/* 2. SECTION: Dedicated Download APK Box ("تحميل apk") - Only Admin can Edit */}
+        <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-950 to-teal-950/40 border-2 border-emerald-500/50 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black">
+                <Smartphone className="w-4 h-4" />
+              </div>
+              <div>
+                <h4 className="text-xs font-black text-white flex items-center gap-1.5">
+                  <span>خانة رابط تحميل ملف الـ APK:</span>
+                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
+                    APK
+                  </span>
+                  {canEditApk ? (
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                      إدارة النظام
+                    </span>
+                  ) : (
+                    <span className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <Lock className="w-3 h-3 text-amber-400" />
+                      خاص بالإدارة
+                    </span>
+                  )}
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  {canEditApk
+                    ? 'بصفتك مسؤول الإدارة، يمكنك تعديل وحفظ رابط ملف الـ APK المباشر هنا'
+                    : 'رابط التحميل المباشر لتطبيق وصلني في الأحساء المعتمَد من إدارة المنصة'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              {saveApkSuccess && (
+                <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1 animate-in fade-in">
+                  <Check className="w-3.5 h-3.5" />
+                  تم الحفظ بنجاح!
+                </span>
+              )}
+
+              {canEditApk ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isEditingApkUrl) {
+                      handleSaveApkUrl(apkUrl);
+                    } else {
+                      setIsEditingApkUrl(true);
+                      setTimeout(() => apkInputRef.current?.focus(), 50);
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/40 flex items-center gap-1 text-[11px] font-bold transition-all"
+                >
+                  {isEditingApkUrl ? <Save className="w-3 h-3 text-emerald-400" /> : <Edit2 className="w-3 h-3" />}
+                  <span>{isEditingApkUrl ? 'حفظ الرابط' : 'تعديل الرابط'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAdminAuthModal(true);
+                    setAdminAuthError(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 text-[11px] font-bold transition-all"
+                  title="تسجيل دخول الإدارة لتعديل الرابط"
+                >
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>دخول الإدارة للتعديل</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Inline Admin Verification Prompt */}
+          {showAdminAuthModal && !canEditApk && (
+            <div className="p-3.5 rounded-xl bg-slate-900 border border-amber-500/40 space-y-2.5 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-amber-400">
+                  <KeyRound className="w-4 h-4" />
+                  <span>التحقق من هوية الإدارة لتعديل الرابط</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdminAuthModal(false)}
+                  className="text-slate-400 hover:text-white text-xs"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-300 leading-relaxed">
+                تعديل وتحديد رابط تحميل الـ APK مخصص لإدارة المنصة فقط. يرجى إدخال كلمة مرور الإدارة للمتابعة:
+              </p>
+              <form onSubmit={handleVerifyAdmin} className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={adminPasswordInput}
+                  onChange={(e) => {
+                    setAdminPasswordInput(e.target.value);
+                    if (adminAuthError) setAdminAuthError(null);
+                  }}
+                  placeholder="كلمة مرور الإدارة..."
+                  className="bg-slate-950 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 flex-1 outline-none focus:border-amber-500"
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow transition-all"
+                >
+                  تحقق وتفعيل
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAdminAuthModal(false)}
+                  className="px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs"
+                >
+                  إلغاء
+                </button>
+              </form>
+              {adminAuthError && (
+                <div className="text-[10px] text-rose-400 font-bold flex items-center gap-1">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <span>{adminAuthError}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* APK URL Input */}
+          <div className={`flex items-center gap-2 bg-slate-950 border rounded-2xl p-2 pr-3 ${
+            canEditApk ? 'border-emerald-500/40' : 'border-slate-800'
+          }`}>
+            <input
+              ref={apkInputRef}
+              type="text"
+              readOnly={!canEditApk || !isEditingApkUrl}
+              value={apkUrl}
+              onChange={(e) => {
+                if (canEditApk) {
+                  setApkUrl(e.target.value.trim());
+                  if (apkError) setApkError(null);
+                }
+              }}
+              placeholder={canEditApk ? 'ضع أو الصق رابط تحميل ملف الـ APK المباشر هنا...' : 'بانتظار تحديد رابط التحميل من إدارة المنصة'}
+              className={`bg-transparent text-xs text-emerald-300 placeholder-slate-500 font-mono flex-1 outline-none text-left ${
+                canEditApk && isEditingApkUrl ? 'border-b border-emerald-500 py-1 bg-slate-900/60 rounded px-2 select-all' : 'cursor-default'
+              }`}
+              dir="ltr"
+            />
+            {canEditApk && isEditingApkUrl ? (
+              <button
+                type="button"
+                onClick={() => handleSaveApkUrl(apkUrl)}
+                className="px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow"
+              >
+                <Save className="w-4 h-4" />
+                <span>حفظ</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleCopyApkUrl}
+                className={`px-3 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shrink-0 ${
+                  copiedApk
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700'
+                }`}
+              >
+                {copiedApk ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedApk ? 'تم النسخ!' : 'نسخ'}</span>
+              </button>
+            )}
+          </div>
+
+          {apkError && (
+            <div className="text-[11px] text-amber-300 flex items-center gap-1 bg-amber-950/40 border border-amber-800/60 p-2 rounded-xl">
+              <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>{apkError}</span>
+            </div>
+          )}
+
+          {/* Prominent "تحميل apk" Button */}
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {apkUrl.trim() ? (
+              <a
+                href={apkUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 active:scale-95 transition-all"
+              >
+                <Download className="w-4 h-4 animate-bounce" />
+                <span>تحميل apk</span>
+              </a>
+            ) : canEditApk ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditingApkUrl(true);
+                  setApkError('بصفتك مسؤول الإدارة، الصق رابط الـ APK في الخانة أعلاه واضغط على "حفظ"');
+                  apkInputRef.current?.focus();
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-750 border border-emerald-500/50 text-emerald-300 font-black text-xs flex items-center justify-center gap-2 shadow transition-all"
+              >
+                <Download className="w-4 h-4 text-emerald-400" />
+                <span>تحميل apk (انقر لتحديد رابط التحميل بصفتك إدارة)</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled
+                className="flex-1 py-2.5 px-4 rounded-xl bg-slate-800/80 border border-slate-700 text-slate-400 font-bold text-xs flex items-center justify-center gap-2 opacity-80 cursor-not-allowed"
+              >
+                <Download className="w-4 h-4 text-slate-500" />
+                <span>تحميل apk (بانتظار إضافة الرابط من إدارة المنصة)</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleCopyApkUrl}
+              className={`py-2.5 px-3.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                copiedApk
+                  ? 'bg-emerald-600 text-white border-emerald-500'
+                  : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
+              }`}
+            >
+              {copiedApk ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              <span>{copiedApk ? 'تم نسخ رابط APK!' : 'نسخ رابط APK'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 3. SECTION: Quick Social Share Buttons */}
         <div className="space-y-2">
           <label className="text-xs font-bold text-slate-300">المشاركة المباشرة عبر التطبيقات:</label>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -270,7 +627,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </div>
         </div>
 
-        {/* QR Code Section */}
+        {/* 4. SECTION: QR Code Section */}
         <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row items-center gap-4">
           <div className="bg-white p-2 rounded-xl shadow-md shrink-0">
             <img
@@ -286,7 +643,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               <span>امسح الرمز بكاميرا الجوال</span>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed">
-              يمكن لأي راكب أو زميل مسح الرمز بكاميرا هاتفه لفتح التطبيق فوراً والبدء بحجز المقاعد ومتابعة الحافلات.
+              يمكن لأي راكب أو سائق مسح الرمز بكاميرا هاتفه لفتح التطبيق فوراً والبدء بحجز المقاعد ومتابعة الحافلات.
             </p>
           </div>
         </div>

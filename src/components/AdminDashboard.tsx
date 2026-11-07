@@ -39,8 +39,12 @@ import {
   Navigation,
   Radio,
   Compass,
-  Info
+  Info,
+  Smartphone,
+  Download,
+  ExternalLink
 } from 'lucide-react';
+import { getSavedApkUrl, setSavedApkUrl } from '../utils/urlConfig';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -95,6 +99,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [announcementText, setAnnouncementText] = useState(transitStore.getAnnouncement().text);
   const [announcementActive, setAnnouncementActive] = useState(transitStore.getAnnouncement().active);
   const [ticketReply, setTicketReply] = useState<{ id: string; reply: string } | null>(null);
+
+  // APK Download URL state for Admin
+  const [adminApkUrl, setAdminApkUrl] = useState(() => getSavedApkUrl());
+  const [apkSaveSuccess, setApkSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    const handleApkUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail !== undefined) {
+        setAdminApkUrl(customEvent.detail);
+      }
+    };
+    window.addEventListener('alahsa_apk_url_updated', handleApkUpdate);
+    return () => window.removeEventListener('alahsa_apk_url_updated', handleApkUpdate);
+  }, []);
+
+  const handleSaveAdminApk = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavedApkUrl(adminApkUrl.trim());
+    setApkSaveSuccess(true);
+    setFeedback({ type: 'success', msg: 'تم حفظ وتحديث رابط تحميل الـ APK المعتمد بنجاح ✓' });
+    setTimeout(() => setApkSaveSuccess(false), 2500);
+  };
 
   // Feedback notifications
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; msg: string } | null>(null);
@@ -1846,6 +1873,69 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 >
                   حفظ وتحديث الإعلان العام
                 </button>
+              </form>
+            </div>
+
+            {/* APK Download Link Manager Card */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                    <Smartphone className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-white">رابط تحميل تطبيق الـ APK (خاص بالإدارة)</h3>
+                    <p className="text-xs text-slate-400">تحديد رابط تحميل تطبيق الأندرويد لجميع الركاب والزوار</p>
+                  </div>
+                </div>
+                {apkSaveSuccess && (
+                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" />
+                    تم الحفظ!
+                  </span>
+                )}
+              </div>
+
+              <form onSubmit={handleSaveAdminApk} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1 font-semibold">
+                    رابط ملف APK المباشر (Google Drive / Dropbox / سيرفر خاص)
+                  </label>
+                  <input
+                    type="text"
+                    value={adminApkUrl}
+                    onChange={(e) => setAdminApkUrl(e.target.value.trim())}
+                    placeholder="https://..."
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-emerald-300 font-mono focus:outline-none focus:border-emerald-500 text-left"
+                    dir="ltr"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    هذا الرابط سيظهر في نافذة المشاركة وزر "تحميل apk" لكافة مستخدمي التطبيق.
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/30 transition-all flex items-center justify-center gap-1.5"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>حفظ واعتماد رابط APK</span>
+                  </button>
+
+                  {adminApkUrl.trim() && (
+                    <a
+                      href={adminApkUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>تجربة التحميل</span>
+                      <ExternalLink className="w-3 h-3 text-slate-400" />
+                    </a>
+                  )}
+                </div>
               </form>
             </div>
           </div>

@@ -24,3 +24,25 @@ export const setSavedShareUrl = (url: string): void => {
     // ignore
   }
 };
+
+const APK_STORAGE_KEY = 'alahsa_transit_apk_url';
+export const DEFAULT_APK_URL = '';
+
+export const getSavedApkUrl = (): string => {
+  if (typeof window === 'undefined') return DEFAULT_APK_URL;
+  try {
+    const saved = localStorage.getItem(APK_STORAGE_KEY);
+    if (saved && saved.trim()) return saved.trim();
+  } catch {}
+  return DEFAULT_APK_URL;
+};
+
+export const setSavedApkUrl = (url: string): void => {
+  if (typeof window === 'undefined') return;
+  try {
+    const cleanUrl = url.trim();
+    localStorage.setItem(APK_STORAGE_KEY, cleanUrl);
+    window.dispatchEvent(new CustomEvent('alahsa_apk_url_updated', { detail: cleanUrl }));
+  } catch {}
+};
+

@@ -109,7 +109,11 @@ export default function App() {
       </main>
 
       {/* Share App modal */}
-      <ShareModal isOpen={isShareModalOpen} onClose={() => setIsShareModalOpen(false)} />
+      <ShareModal
+        isOpen={isShareModalOpen}
+        onClose={() => setIsShareModalOpen(false)}
+        currentUser={currentUser}
+      />
 
       {/* Modern Footer */}
       <footer className="bg-slate-900/60 border-t border-slate-800/80 py-6 px-4 text-center text-xs text-slate-500">
