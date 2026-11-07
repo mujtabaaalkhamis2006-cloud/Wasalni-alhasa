@@ -125,8 +125,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     ? `${shareText}\n${activeUrl}\n\nرابط تحميل APK المباشر:\n${apkUrl}`
     : `${shareText}\n${activeUrl}`;
 
-  // Save Web URL
+  // Save Web URL (Admin only)
   const handleSaveUrl = (urlToSave: string) => {
+    if (!canEditApk) {
+      setShowAdminAuthModal(true);
+      return;
+    }
     const trimmed = urlToSave.trim();
     if (trimmed) {
       setActiveUrl(trimmed);
@@ -238,13 +242,27 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </button>
         </div>
 
-        {/* 1. SECTION: Web App Link Box (Just like before, editable by user) */}
+        {/* 1. SECTION: Web App Link Box (رابط المشاركة - تعديل الإدارة فقط) */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
-              <Globe className="w-4 h-4 text-sky-400" />
-              <span>رابط المنصة والموقع (Web):</span>
-            </label>
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                <Globe className="w-4 h-4 text-sky-400" />
+                <span>رابط المشاركة والمنصة (Web):</span>
+              </label>
+              {canEditApk ? (
+                <span className="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/40 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3 text-sky-400" />
+                  الإدارة
+                </span>
+              ) : (
+                <span className="text-[10px] bg-slate-800 text-amber-300 border border-slate-700 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  الإدارة فقط من تعدل الرابط
+                </span>
+              )}
+            </div>
+
             <div className="flex items-center gap-2">
               {saveSuccess && (
                 <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1 animate-in fade-in">
@@ -252,36 +270,56 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                   تم الحفظ!
                 </span>
               )}
-              <button
-                type="button"
-                onClick={() => {
-                  if (isEditingUrl) {
-                    handleSaveUrl(activeUrl);
-                  } else {
-                    setIsEditingUrl(true);
-                  }
-                }}
-                className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 flex items-center gap-1 text-[11px] font-bold transition-all"
-              >
-                {isEditingUrl ? <Save className="w-3 h-3 text-emerald-400" /> : <Edit2 className="w-3 h-3" />}
-                <span>{isEditingUrl ? 'حفظ الرابط' : 'تعديل الرابط'}</span>
-              </button>
+
+              {canEditApk ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isEditingUrl) {
+                      handleSaveUrl(activeUrl);
+                    } else {
+                      setIsEditingUrl(true);
+                    }
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 flex items-center gap-1 text-[11px] font-bold transition-all"
+                >
+                  {isEditingUrl ? <Save className="w-3 h-3 text-emerald-400" /> : <Edit2 className="w-3 h-3" />}
+                  <span>{isEditingUrl ? 'حفظ الرابط' : 'تعديل الرابط'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAdminAuthModal(true);
+                    setAdminAuthError(null);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 text-[11px] font-bold transition-all"
+                  title="تسجيل دخول الإدارة لتعديل الرابط"
+                >
+                  <Lock className="w-3 h-3 text-amber-400" />
+                  <span>دخول الإدارة للتعديل</span>
+                </button>
+              )}
             </div>
           </div>
 
           <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-2xl p-2 pr-3">
             <input
               type="text"
-              readOnly={!isEditingUrl}
+              readOnly={!canEditApk || !isEditingUrl}
               value={activeUrl}
-              onChange={(e) => setActiveUrl(e.target.value.trim())}
+              onChange={(e) => {
+                if (canEditApk) {
+                  setActiveUrl(e.target.value.trim());
+                }
+              }}
               placeholder="https://..."
-              className={`bg-transparent text-xs text-sky-300 font-mono flex-1 outline-none select-all text-left ${
-                isEditingUrl ? 'border-b border-sky-500 py-1 bg-slate-900/50 rounded px-2' : ''
+              className={`bg-transparent text-xs text-sky-300 font-mono flex-1 outline-none text-left ${
+                canEditApk && isEditingUrl ? 'border-b border-sky-500 py-1 bg-slate-900/50 rounded px-2 select-all' : 'cursor-default'
               }`}
               dir="ltr"
             />
-            {isEditingUrl ? (
+            {canEditApk && isEditingUrl ? (
               <button
                 onClick={() => handleSaveUrl(activeUrl)}
                 className="px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0"
@@ -306,26 +344,30 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
           {/* Quick Actions */}
           <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px]">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => handleSaveUrl(PRIMARY_STUDIO_URL)}
-                className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1"
-                title="استعادة الرابط الأصلي"
-              >
-                <RefreshCw className="w-3 h-3 text-sky-400" />
-                <span>الرابط الأساسي</span>
-              </button>
-              {currentBrowserOrigin && currentBrowserOrigin !== activeUrl && (
+            {canEditApk ? (
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleSaveUrl(currentBrowserOrigin)}
-                  className="px-2 py-0.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-[10px]"
+                  onClick={() => handleSaveUrl(PRIMARY_STUDIO_URL)}
+                  className="px-2 py-0.5 rounded border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] flex items-center gap-1"
+                  title="استعادة الرابط الأساسي"
                 >
-                  استخدام رابط المتصفح
+                  <RefreshCw className="w-3 h-3 text-sky-400" />
+                  <span>الرابط الأساسي</span>
                 </button>
-              )}
-            </div>
+                {currentBrowserOrigin && currentBrowserOrigin !== activeUrl && (
+                  <button
+                    type="button"
+                    onClick={() => handleSaveUrl(currentBrowserOrigin)}
+                    className="px-2 py-0.5 rounded border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white text-[10px]"
+                  >
+                    استخدام رابط المتصفح
+                  </button>
+                )}
+              </div>
+            ) : (
+              <span className="text-[10px] text-slate-500">رابط المنصة الرسمي المعتمد من قبل الإدارة</span>
+            )}
 
             <a
               href={activeUrl}
@@ -339,35 +381,32 @@ export const ShareModal: React.FC<ShareModalProps> = ({
           </div>
         </div>
 
-        {/* 2. SECTION: Dedicated Download APK Box ("تحميل apk") - Only Admin can Edit */}
+        {/* 2. SECTION: تحميل apk (مكان للرابط وتعديل الإدارة فقط) */}
         <div className="p-4 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-950 to-teal-950/40 border-2 border-emerald-500/50 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black">
-                <Smartphone className="w-4 h-4" />
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-black shadow-inner">
+                <Download className="w-5 h-5 text-emerald-400" />
               </div>
               <div>
-                <h4 className="text-xs font-black text-white flex items-center gap-1.5">
-                  <span>خانة رابط تحميل ملف الـ APK:</span>
-                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-1.5 py-0.2 rounded font-bold">
-                    APK
-                  </span>
+                <div className="flex items-center gap-2">
+                  <h4 className="text-sm font-black text-white">تحميل apk</h4>
                   {canEditApk ? (
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded font-bold flex items-center gap-1">
                       <ShieldCheck className="w-3 h-3 text-emerald-400" />
-                      إدارة النظام
+                      الإدارة (مصرّح بالتعديل)
                     </span>
                   ) : (
-                    <span className="text-[10px] bg-slate-800 text-slate-400 border border-slate-700 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                    <span className="text-[10px] bg-slate-800 text-amber-300 border border-slate-700 px-2 py-0.5 rounded font-bold flex items-center gap-1">
                       <Lock className="w-3 h-3 text-amber-400" />
-                      خاص بالإدارة
+                      الإدارة فقط من تعدل الرابط
                     </span>
                   )}
-                </h4>
+                </div>
                 <p className="text-[11px] text-slate-400">
                   {canEditApk
-                    ? 'بصفتك مسؤول الإدارة، يمكنك تعديل وحفظ رابط ملف الـ APK المباشر هنا'
-                    : 'رابط التحميل المباشر لتطبيق وصلني في الأحساء المعتمَد من إدارة المنصة'}
+                    ? 'بصفتك مسؤول الإدارة، يمكنك وضع وتعديل رابط تحميل تطبيق الـ APK هنا'
+                    : 'خانة رابط تحميل تطبيق الـ APK (التعديل مقتصر على إدارة المنصة فقط)'}
                 </p>
               </div>
             </div>
@@ -467,50 +506,62 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </div>
           )}
 
-          {/* APK URL Input */}
-          <div className={`flex items-center gap-2 bg-slate-950 border rounded-2xl p-2 pr-3 ${
-            canEditApk ? 'border-emerald-500/40' : 'border-slate-800'
-          }`}>
-            <input
-              ref={apkInputRef}
-              type="text"
-              readOnly={!canEditApk || !isEditingApkUrl}
-              value={apkUrl}
-              onChange={(e) => {
-                if (canEditApk) {
-                  setApkUrl(e.target.value.trim());
-                  if (apkError) setApkError(null);
-                }
-              }}
-              placeholder={canEditApk ? 'ضع أو الصق رابط تحميل ملف الـ APK المباشر هنا...' : 'بانتظار تحديد رابط التحميل من إدارة المنصة'}
-              className={`bg-transparent text-xs text-emerald-300 placeholder-slate-500 font-mono flex-1 outline-none text-left ${
-                canEditApk && isEditingApkUrl ? 'border-b border-emerald-500 py-1 bg-slate-900/60 rounded px-2 select-all' : 'cursor-default'
-              }`}
-              dir="ltr"
-            />
-            {canEditApk && isEditingApkUrl ? (
-              <button
-                type="button"
-                onClick={() => handleSaveApkUrl(apkUrl)}
-                className="px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow"
-              >
-                <Save className="w-4 h-4" />
-                <span>حفظ</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleCopyApkUrl}
-                className={`px-3 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shrink-0 ${
-                  copiedApk
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700'
+          {/* APK URL Input Field with label "تحميل apk" */}
+          <div className="space-y-1">
+            <label className="text-[11px] font-bold text-slate-300 flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                <span>رابط تحميل apk:</span>
+                {!canEditApk && <span className="text-[10px] text-amber-400/90 font-normal">(مقفول - الإدارة فقط تعدل)</span>}
+              </span>
+              {canEditApk && isEditingApkUrl && (
+                <span className="text-[10px] text-emerald-400 font-bold">وضع التعديل مفعل</span>
+              )}
+            </label>
+
+            <div className={`flex items-center gap-2 bg-slate-950 border rounded-2xl p-2 pr-3 ${
+              canEditApk ? 'border-emerald-500/40' : 'border-slate-800'
+            }`}>
+              <input
+                ref={apkInputRef}
+                type="text"
+                readOnly={!canEditApk || !isEditingApkUrl}
+                value={apkUrl}
+                onChange={(e) => {
+                  if (canEditApk) {
+                    setApkUrl(e.target.value.trim());
+                    if (apkError) setApkError(null);
+                  }
+                }}
+                placeholder={canEditApk ? 'ضع رابط تحميل apk هنا (Google Drive / Dropbox / مباشر)...' : 'بانتظار تحديد رابط التحميل من إدارة المنصة'}
+                className={`bg-transparent text-xs text-emerald-300 placeholder-slate-500 font-mono flex-1 outline-none text-left ${
+                  canEditApk && isEditingApkUrl ? 'border-b border-emerald-500 py-1 bg-slate-900/60 rounded px-2 select-all' : 'cursor-default'
                 }`}
-              >
-                {copiedApk ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedApk ? 'تم النسخ!' : 'نسخ'}</span>
-              </button>
-            )}
+                dir="ltr"
+              />
+              {canEditApk && isEditingApkUrl ? (
+                <button
+                  type="button"
+                  onClick={() => handleSaveApkUrl(apkUrl)}
+                  className="px-4 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white transition-all shrink-0 shadow"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>حفظ</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleCopyApkUrl}
+                  className={`px-3 py-2 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shrink-0 ${
+                    copiedApk
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700'
+                  }`}
+                >
+                  {copiedApk ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedApk ? 'تم النسخ!' : 'نسخ'}</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {apkError && (

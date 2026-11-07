@@ -42,9 +42,10 @@ import {
   Info,
   Smartphone,
   Download,
-  ExternalLink
+  ExternalLink,
+  Globe
 } from 'lucide-react';
-import { getSavedApkUrl, setSavedApkUrl } from '../utils/urlConfig';
+import { getSavedApkUrl, setSavedApkUrl, getSavedShareUrl, setSavedShareUrl } from '../utils/urlConfig';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -103,6 +104,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // APK Download URL state for Admin
   const [adminApkUrl, setAdminApkUrl] = useState(() => getSavedApkUrl());
   const [apkSaveSuccess, setApkSaveSuccess] = useState(false);
+  const [adminShareUrl, setAdminShareUrl] = useState(() => getSavedShareUrl());
+  const [shareUrlSaveSuccess, setShareUrlSaveSuccess] = useState(false);
 
   useEffect(() => {
     const handleApkUpdate = (e: Event) => {
@@ -111,8 +114,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         setAdminApkUrl(customEvent.detail);
       }
     };
+    const handleUrlUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<string>;
+      if (customEvent.detail !== undefined) {
+        setAdminShareUrl(customEvent.detail);
+      }
+    };
     window.addEventListener('alahsa_apk_url_updated', handleApkUpdate);
-    return () => window.removeEventListener('alahsa_apk_url_updated', handleApkUpdate);
+    window.addEventListener('alahsa_url_updated', handleUrlUpdate);
+    return () => {
+      window.removeEventListener('alahsa_apk_url_updated', handleApkUpdate);
+      window.removeEventListener('alahsa_url_updated', handleUrlUpdate);
+    };
   }, []);
 
   const handleSaveAdminApk = (e: React.FormEvent) => {
@@ -121,6 +134,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setApkSaveSuccess(true);
     setFeedback({ type: 'success', msg: 'تم حفظ وتحديث رابط تحميل الـ APK المعتمد بنجاح ✓' });
     setTimeout(() => setApkSaveSuccess(false), 2500);
+  };
+
+  const handleSaveAdminShareUrl = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavedShareUrl(adminShareUrl.trim());
+    setShareUrlSaveSuccess(true);
+    setFeedback({ type: 'success', msg: 'تم حفظ وتحديث رابط مشاركة المنصة بنجاح ✓' });
+    setTimeout(() => setShareUrlSaveSuccess(false), 2500);
   };
 
   // Feedback notifications
@@ -1876,51 +1897,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </form>
             </div>
 
-            {/* APK Download Link Manager Card */}
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-              <div className="flex items-center justify-between">
+            {/* Links Manager Card (Share URL & APK URL - Admin Only) */}
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-5">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
-                    <Smartphone className="w-4 h-4" />
+                  <div className="w-8 h-8 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold">
+                    <Globe className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="text-base font-black text-white">رابط تحميل تطبيق الـ APK (خاص بالإدارة)</h3>
-                    <p className="text-xs text-slate-400">تحديد رابط تحميل تطبيق الأندرويد لجميع الركاب والزوار</p>
+                    <h3 className="text-base font-black text-white">إدارة روابط المنصة والمشاركة (خاص بالإدارة)</h3>
+                    <p className="text-xs text-slate-400">تحديد رابط مشاركة الموقع ورابط تحميل ملف الـ APK المعتمدين</p>
                   </div>
                 </div>
-                {apkSaveSuccess && (
-                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                    <Check className="w-3.5 h-3.5" />
-                    تم الحفظ!
-                  </span>
-                )}
               </div>
 
-              <form onSubmit={handleSaveAdminApk} className="space-y-3.5">
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1 font-semibold">
-                    رابط ملف APK المباشر (Google Drive / Dropbox / سيرفر خاص)
+              {/* 1. Web Share URL Form */}
+              <form onSubmit={handleSaveAdminShareUrl} className="space-y-3 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs text-sky-300 font-bold flex items-center gap-1.5">
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>رابط مشاركة المنصة (Web Share URL):</span>
                   </label>
-                  <input
-                    type="text"
-                    value={adminApkUrl}
-                    onChange={(e) => setAdminApkUrl(e.target.value.trim())}
-                    placeholder="https://..."
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-emerald-300 font-mono focus:outline-none focus:border-emerald-500 text-left"
-                    dir="ltr"
-                  />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    هذا الرابط سيظهر في نافذة المشاركة وزر "تحميل apk" لكافة مستخدمي التطبيق.
-                  </p>
+                  {shareUrlSaveSuccess && (
+                    <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      تم حفظ الرابط!
+                    </span>
+                  )}
                 </div>
+                <input
+                  type="text"
+                  value={adminShareUrl}
+                  onChange={(e) => setAdminShareUrl(e.target.value.trim())}
+                  placeholder="https://..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-sky-300 font-mono focus:outline-none focus:border-sky-500 text-left"
+                  dir="ltr"
+                />
+                <button
+                  type="submit"
+                  className="w-full py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-md shadow-sky-600/20 transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>حفظ واعتماد رابط المشاركة</span>
+                </button>
+              </form>
 
-                <div className="flex items-center gap-2 pt-1">
+              {/* 2. APK Download URL Form */}
+              <form onSubmit={handleSaveAdminApk} className="space-y-3 p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs text-emerald-300 font-bold flex items-center gap-1.5">
+                    <Smartphone className="w-3.5 h-3.5" />
+                    <span>رابط تحميل ملف الـ APK (تحميل apk):</span>
+                  </label>
+                  {apkSaveSuccess && (
+                    <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                      <Check className="w-3 h-3" />
+                      تم حفظ رابط APK!
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={adminApkUrl}
+                  onChange={(e) => setAdminApkUrl(e.target.value.trim())}
+                  placeholder="https://... (رابط Google Drive أو Dropbox أو سيرفر)"
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-emerald-300 font-mono focus:outline-none focus:border-emerald-500 text-left"
+                  dir="ltr"
+                />
+                <div className="flex items-center gap-2">
                   <button
                     type="submit"
-                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/30 transition-all flex items-center justify-center gap-1.5"
+                    className="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition-all flex items-center justify-center gap-1.5"
                   >
-                    <Check className="w-4 h-4" />
-                    <span>حفظ واعتماد رابط APK</span>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>حفظ واعتماد رابط تحميل APK</span>
                   </button>
 
                   {adminApkUrl.trim() && (
@@ -1928,11 +1978,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       href={adminApkUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700"
+                      className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1.5 border border-slate-700"
                     >
                       <Download className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>تجربة التحميل</span>
-                      <ExternalLink className="w-3 h-3 text-slate-400" />
+                      <span>تجربة</span>
                     </a>
                   )}
                 </div>

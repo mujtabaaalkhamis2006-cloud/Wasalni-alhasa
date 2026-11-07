@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, ActivePresence } from '../types/transit';
-import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Menu, X, Radio } from 'lucide-react';
+import { Bus, UserCheck, Shield, LogOut, UserCircle, RefreshCw, Share2, Radio } from 'lucide-react';
 import { transitStore } from '../services/transitStore';
 import { LivePresenceModal } from './LivePresenceModal';
 
@@ -15,13 +15,11 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({
   currentUser,
-  currentPath,
   onNavigate,
   onLogout,
   onOpenShareModal
 }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [presenceList, setPresenceList] = useState<ActivePresence[]>(() => transitStore.getActivePresence());
   const [isPresenceModalOpen, setIsPresenceModalOpen] = useState(false);
 
@@ -41,18 +39,13 @@ export const Navbar: React.FC<NavbarProps> = ({
     }, 1000);
   };
 
-  const handleMobileNav = (path: string) => {
-    setIsMobileMenuOpen(false);
-    onNavigate(path);
-  };
-
   return (
     <header className="sticky top-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           {/* Logo & Brand */}
           <div
-            onClick={() => handleMobileNav('/')}
+            onClick={() => onNavigate('/')}
             className="flex items-center gap-3 cursor-pointer group"
           >
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-teal-500 flex items-center justify-center text-white shadow-lg shadow-sky-600/30 group-hover:scale-105 transition-transform">
@@ -68,20 +61,6 @@ export const Navbar: React.FC<NavbarProps> = ({
               <p className="text-[11px] text-slate-400">شبكة النقل الذكي لواحة الأحساء</p>
             </div>
           </div>
-
-          {/* Desktop Direct URLs Navigation */}
-          <nav className="hidden lg:flex items-center gap-1.5">
-            <button
-              onClick={() => onNavigate('/')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                currentPath === '/'
-                  ? 'bg-sky-600/20 text-sky-400 border border-sky-500/30'
-                  : 'text-slate-300 hover:text-white hover:bg-slate-800'
-              }`}
-            >
-              الرئيسية
-            </button>
-          </nav>
 
           {/* Right Action buttons & Auth Status */}
           <div className="flex items-center gap-2">
@@ -152,52 +131,15 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
             ) : (
               <button
-                onClick={() => handleMobileNav('/')}
+                onClick={() => onNavigate('/')}
                 className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-sky-600 text-white text-xs font-bold hover:bg-sky-500 shadow-sm transition-colors"
               >
                 <UserCircle className="w-4 h-4" />
                 <span>دخول</span>
               </button>
             )}
-
-            {/* Mobile Hamburger Toggle */}
-            <button
-              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:text-white border border-slate-700 lg:hidden"
-              title="القائمة"
-            >
-              {isMobileMenuOpen ? <X className="w-5 h-5 text-rose-400" /> : <Menu className="w-5 h-5" />}
-            </button>
           </div>
         </div>
-
-        {/* Mobile Dedicated Quick-Action Bar */}
-        <div className="lg:hidden py-1.5 border-t border-slate-800/80 flex items-center justify-between text-[11px]">
-          <button
-            onClick={() => handleMobileNav('/')}
-            className={`px-3 py-1 rounded-lg font-bold transition-all ${
-              currentPath === '/'
-                ? 'bg-sky-600 text-white shadow-sm'
-                : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-            }`}
-          >
-            الرئيسية
-          </button>
-          <span className="text-[10px] text-slate-500 font-bold">وصلني في الأحساء</span>
-        </div>
-
-        {/* Mobile Dropdown Menu Drawer */}
-        {isMobileMenuOpen && (
-          <div className="lg:hidden py-3 border-t border-slate-800 space-y-1.5 animate-in slide-in-from-top duration-200">
-            <button
-              onClick={() => handleMobileNav('/')}
-              className="w-full text-right px-3.5 py-2.5 rounded-xl text-xs font-bold text-white hover:bg-slate-800 flex items-center justify-between"
-            >
-              <span>الرئيسية (لوحة الراكب والرحلات وحسابات السائقين)</span>
-              <span className="text-[10px] text-slate-500" dir="ltr">/</span>
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Live Cross-Device Connected Presence Modal */}
