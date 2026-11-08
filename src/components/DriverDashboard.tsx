@@ -96,16 +96,30 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
 
     // Active trips are strictly in_progress or scheduled
     const current = trips.find(t => t.id === activeTripId);
+    let targetActiveTripId = activeTripId;
+
     if (!current || current.status === 'completed' || current.status === 'cancelled') {
       const inProg = trips.find(t => t.status === 'in_progress');
       const scheduled = trips.find(t => t.status === 'scheduled');
       if (inProg) {
+        targetActiveTripId = inProg.id;
         setActiveTripId(inProg.id);
       } else if (scheduled) {
+        targetActiveTripId = scheduled.id;
         setActiveTripId(scheduled.id);
       } else {
+        targetActiveTripId = null;
         setActiveTripId(null);
       }
+    }
+
+    // Always fetch latest passenger bookings for the driver
+    if (targetActiveTripId) {
+      setPassengers(transitStore.getTripPassengers(targetActiveTripId));
+    } else {
+      const myTripIds = new Set(trips.map(t => t.id));
+      const allDriverPassengers = transitStore.getAllBookings().filter(b => myTripIds.has(b.tripId) && b.status !== 'cancelled');
+      setPassengers(allDriverPassengers);
     }
   };
 
@@ -119,18 +133,22 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     return unsub;
   }, [currentUser]);
 
-  // Requirement: Auto update passengers list every 15 seconds
+  // Requirement: Auto update passengers list instantly on store events and every 3 seconds
   useEffect(() => {
-    if (!activeTripId) return;
-
     const loadPassengers = () => {
-      setPassengers(transitStore.getTripPassengers(activeTripId));
+      if (activeTripId) {
+        setPassengers(transitStore.getTripPassengers(activeTripId));
+      } else {
+        const trips = transitStore.getDriverTrips(currentUser.id);
+        const myTripIds = new Set(trips.map(t => t.id));
+        setPassengers(transitStore.getAllBookings().filter(b => myTripIds.has(b.tripId) && b.status !== 'cancelled'));
+      }
     };
 
     loadPassengers();
-    const interval = setInterval(loadPassengers, 15000);
+    const interval = setInterval(loadPassengers, 3000);
     return () => clearInterval(interval);
-  }, [activeTripId]);
+  }, [activeTripId, currentUser.id]);
 
   // Selected Trip object
   const currentTrip = driverTrips.find(t => t.id === activeTripId);
@@ -446,41 +464,23 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     });
   };
 
-  // Requirement: Cancel Trip -> cancels all its bookings
+  // Requirement: Cancel Trip immediately -> cancels all its bookings and deletes trip on the spot as requested: "ابي الرحله تنلغي على طول"
   const handleCancelTrip = (targetTripId?: string, targetRouteName?: string) => {
     const idToCancel = targetTripId || activeTripId;
     if (!idToCancel) return;
     const nameToDisplay = targetRouteName || currentTrip?.routeName || 'الرحلة';
 
-    setConfirmDialog({
-      isOpen: true,
-      title: 'إلغاء الرحلة',
-      message: `هل أنت متأكد من رغبتك في إلغاء ${nameToDisplay}؟ سيتم إشعار جميع الركاب وإلغاء حجوزاتهم فوراً.`,
-      confirmLabel: 'تأكيد إلغاء الرحلة',
-      type: 'danger',
-      onConfirm: () => {
-        const res = transitStore.cancelTrip(idToCancel);
-        if (res.success) {
-          setFeedback({ type: 'success', msg: `تم إلغاء ${nameToDisplay} وجميع حجوزاتها المرتبطة بنجاح ✓` });
+    // 1. Mark cancelled and notify passengers
+    transitStore.cancelTrip(idToCancel);
+    // 2. Delete trip immediately so it is removed completely on the spot
+    transitStore.deleteTrip(idToCancel);
 
-          // Reset active selection if the cancelled trip was the currently displayed one
-          const allTrips = transitStore.getDriverTrips(currentUser.id);
-          const nextInProg = allTrips.find(t => t.id !== idToCancel && t.status === 'in_progress');
-          const nextScheduled = allTrips.find(t => t.id !== idToCancel && t.status === 'scheduled');
-          if (nextInProg) {
-            setActiveTripId(nextInProg.id);
-          } else if (nextScheduled) {
-            setActiveTripId(nextScheduled.id);
-          } else {
-            setActiveTripId(null);
-          }
-          setGpsTelemetry(prev => ({ ...prev, active: false }));
-          refreshData();
-        } else {
-          setFeedback({ type: 'error', msg: res.error || 'تعذر إلغاء الرحلة' });
-        }
-      }
-    });
+    // 3. Clear cockpit selection immediately
+    setActiveTripId(null);
+    setGpsTelemetry(prev => ({ ...prev, active: false }));
+    setFeedback({ type: 'success', msg: `تم إلغاء ${nameToDisplay} على طول وحذفها وإشعار الركاب بنجاح ✓` });
+    refreshData();
+    setTimeout(() => setFeedback(null), 3000);
   };
 
   // Permanently delete a cancelled or completed trip from driver records
@@ -1061,24 +1061,58 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       )}
 
       {!currentTrip ? (
-        <div className="text-center py-14 bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-4">
-          <Bus className="w-14 h-14 text-amber-400/60 mx-auto" />
-          <div>
-            <h4 className="text-white font-black text-base mb-1">
-              {driverTrips.length > 0 ? 'لا توجد رحلة جارية محددة حالياً' : 'لم تقم بإطلاق أي رحلة بعد'}
-            </h4>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
-              {driverTrips.length > 0
-                ? 'تم إنهاء أو اكتمال رحلتك بنجاح. بإمكانك إطلاق رحلة جديدة عبر الزر أدناه، أو اختيار رحلة من جدول رحلاتك لعرض تفاصيلها.'
-                : 'بصفتك سائقاً معتمداً، يمكنك اختيار المسار المناسب لك وتحديد وقت الانطلاق وسعر التذكرة ليظهر فوراً للركاب في الأحساء.'}
-            </p>
+        <div className="space-y-4">
+          <div className="text-center py-14 bg-slate-900 border border-slate-800 rounded-3xl p-8 space-y-4">
+            <Bus className="w-14 h-14 text-amber-400/60 mx-auto" />
+            <div>
+              <h4 className="text-white font-black text-base mb-1">
+                {driverTrips.length > 0 ? 'لا توجد رحلة جارية محددة حالياً' : 'لم تقم بإطلاق أي رحلة بعد'}
+              </h4>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                {driverTrips.length > 0
+                  ? 'تم إنهاء أو اكتمال رحلتك بنجاح. بإمكانك إطلاق رحلة جديدة عبر الزر أدناه، أو اختيار رحلة من جدول رحلاتك لعرض تفاصيلها.'
+                  : 'بصفتك سائقاً معتمداً، يمكنك اختيار المسار المناسب لك وتحديد وقت الانطلاق وسعر التذكرة ليظهر فوراً للركاب في الأحساء.'}
+              </p>
+            </div>
+            <button
+              onClick={() => setShowLaunchModal(true)}
+              className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20"
+            >
+              + حدد مسارك وأطلق رحلتك الآن
+            </button>
           </div>
-          <button
-            onClick={() => setShowLaunchModal(true)}
-            className="px-6 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs shadow-lg shadow-amber-500/20"
-          >
-            + حدد مسارك وأطلق رحلتك الآن
-          </button>
+
+          {passengers.length > 0 && (
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                  <Users className="w-4 h-4 text-amber-400" />
+                  <span>حجوزات ركاب رحلاتك ({passengers.length})</span>
+                </h4>
+                <span className="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1 rounded-lg font-bold">
+                  مؤكدين: {passengers.filter(p => p.status === 'confirmed').length} راكب
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {passengers.map(p => (
+                  <div key={p.id} className="p-3 rounded-2xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <span className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 font-black flex items-center justify-center text-xs">
+                        #{p.seatNumber}
+                      </span>
+                      <div>
+                        <span className="font-bold text-white block text-xs">{p.passengerName}</span>
+                        <span className="text-[11px] text-slate-400">نزول: {p.dropoffStation} · جوال: {p.passengerPhone}</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
+                      {p.status === 'boarded' ? 'تم الصعود ✓' : 'حجز مؤكد'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-6">
@@ -1121,8 +1155,19 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                     hour: '2-digit',
                     minute: '2-digit'
                   })}{' '}
-                  | ركاب محجوزين: {passengers.length} من {currentTrip.totalSeats} مقعد
+                  | ركاب محجوزين: <strong className="text-amber-400">{passengers.length}</strong> من {currentTrip.totalSeats} مقعد
                 </p>
+
+                {passengers.length > 0 && (
+                  <div className="mt-2 p-2 px-3 rounded-xl bg-amber-500/15 border border-amber-500/40 flex items-center gap-2 text-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                    <span className="font-bold text-amber-300 shrink-0">يوجد ({passengers.length}) حجز راكب:</span>
+                    <span className="text-slate-200 truncate font-mono text-[11px]">
+                      {passengers.slice(0, 3).map(p => `${p.passengerName} (مقعد #${p.seatNumber})`).join(' · ')}
+                      {passengers.length > 3 ? ` و ${passengers.length - 3} آخرين` : ''}
+                    </span>
+                  </div>
+                )}
 
                 {/* Driver Device Physical Location Live Tag */}
                 <div className="flex flex-wrap items-center gap-2 mt-2 text-xs">

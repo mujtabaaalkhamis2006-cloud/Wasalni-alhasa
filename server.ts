@@ -660,6 +660,37 @@ app.post('/api/transit/trip-status', (req: Request, res: Response) => {
   }
 });
 
+// Create / Sync Booking Endpoint with immediate multi-device broadcast
+app.post('/api/transit/bookings', (req: Request, res: Response) => {
+  try {
+    const booking = req.body;
+    if (!booking || !booking.id || !booking.tripId) {
+      return res.status(400).json({ error: 'Missing booking details' });
+    }
+    if (!serverTransitData) serverTransitData = getTransitData();
+    if (!Array.isArray(serverTransitData.bookings)) serverTransitData.bookings = [];
+
+    // Avoid duplicate
+    serverTransitData.bookings = serverTransitData.bookings.filter((b: any) => b.id !== booking.id);
+    serverTransitData.bookings.push(booking);
+
+    // Update availableSeats on trip
+    const trip = (serverTransitData.trips || []).find((t: any) => t.id === booking.tripId);
+    if (trip) {
+      const activeCount = serverTransitData.bookings.filter((b: any) => b.tripId === trip.id && b.status !== 'cancelled').length;
+      trip.availableSeats = Math.max(0, trip.totalSeats - activeCount);
+    }
+
+    saveTransitDataToFile();
+    broadcastSseEvent('booking:created', { booking, trip });
+    broadcastSseEvent('state', serverTransitData);
+
+    return res.json({ success: true, booking });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Server error saving booking' });
+  }
+});
+
 // Purge Mock Registrations Endpoint (Permanent ban of all fake/mock users)
 app.post('/api/transit/purge-mock-data', (_req: Request, res: Response) => {
   try {

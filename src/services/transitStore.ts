@@ -935,6 +935,15 @@ class TransitStore {
         } catch {}
       });
 
+      this.sseEventSource.addEventListener('booking:created', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload?.booking) {
+            this.applyRemoteBooking(payload.booking);
+          }
+        } catch {}
+      });
+
       this.sseEventSource.addEventListener('gps', (e: MessageEvent) => {
         try {
           const { tripId, currentLocation } = JSON.parse(e.data);
@@ -1032,6 +1041,32 @@ class TransitStore {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
     } catch {}
+    this.notify();
+  }
+
+  public applyRemoteBooking(booking: Booking) {
+    if (!booking || !booking.id) return;
+    const tombstoneBookings = new Set(this.data.deletedBookingIds || []);
+    if (tombstoneBookings.has(booking.id)) return;
+
+    const existingIndex = this.data.bookings.findIndex(b => b.id === booking.id);
+    if (existingIndex >= 0) {
+      this.data.bookings[existingIndex] = booking;
+    } else {
+      this.data.bookings.unshift(booking);
+    }
+
+    // Update trip available seats
+    const trip = this.data.trips.find(t => t.id === booking.tripId);
+    if (trip) {
+      const activeCount = this.data.bookings.filter(b => b.tripId === trip.id && b.status !== 'cancelled').length;
+      trip.availableSeats = Math.max(0, trip.totalSeats - activeCount);
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    } catch {}
+
     this.notify();
   }
 
@@ -1561,7 +1596,7 @@ class TransitStore {
       }
     }
 
-    if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length || this.data.routes.length !== mergedRoutes.length) {
+    if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length || this.data.routes.length !== mergedRoutes.length || this.data.bookings.length !== mergedBookings.length) {
       this.data = {
         ...this.data,
         users: mergedUsers,
@@ -2197,6 +2232,22 @@ class TransitStore {
     trip.availableSeats = Math.max(0, trip.totalSeats - (occupiedSeats.size + 1));
 
     this.saveData(this.data);
+
+    // Call server endpoint directly for guaranteed immediate persistence and driver SSE distribution
+    try {
+      fetch(`${this.getApiBaseUrl()}/api/transit/bookings`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newBooking)
+      }).catch(() => {});
+    } catch {}
+
+    this.publishMqtt('al-ahsa-transit/v5/booking-created', {
+      booking: newBooking,
+      senderSessionId: this.sessionId,
+      timestamp: Date.now()
+    }, { qos: 1 });
+
     return { success: true, booking: newBooking };
   }
 

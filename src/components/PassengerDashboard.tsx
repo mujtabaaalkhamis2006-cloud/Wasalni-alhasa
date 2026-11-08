@@ -205,9 +205,14 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
     setCustomDropoffName('');
     setCustomCoords(null);
 
-    // Default to the last station in the route if available
+    // Default to the last passenger station in the route (strictly excluding driver GPS location)
     const route = transitStore.getRoutes().find(r => r.id === trip.routeId) || routes.find(r => r.id === trip.routeId);
-    if (route && route.stations.length > 0) {
+    const passengerStations = (route?.stations || []).filter(
+      st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+    );
+    if (passengerStations.length > 0) {
+      setSelectedStation(passengerStations[passengerStations.length - 1]);
+    } else if (route && route.stations.length > 0) {
       setSelectedStation(route.stations[route.stations.length - 1]);
     } else {
       setSelectedStation(null);
@@ -220,7 +225,16 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
     setIsSubmittingBooking(true);
     setBookingError(null);
 
-    const dropoffLabel = customDropoffName.trim() || selectedStation?.nameAr || 'المحطة الأخيرة';
+    // Ensure passenger NEVER books to or from driver location
+    let dropoffLabel = customDropoffName.trim() || selectedStation?.nameAr || 'المحطة الأخيرة';
+    if (dropoffLabel.includes('السائق') || dropoffLabel.includes('gps')) {
+      const route = transitStore.getRoutes().find(r => r.id === selectedTripForBooking.routeId) || routes.find(r => r.id === selectedTripForBooking.routeId);
+      const passengerStations = (route?.stations || []).filter(
+        st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+      );
+      dropoffLabel = passengerStations[passengerStations.length - 1]?.nameAr || 'المحطة الأخيرة';
+    }
+
     const dropoffCoords = customCoords || (selectedStation ? { lat: selectedStation.lat, lng: selectedStation.lng } : undefined);
 
     const result = transitStore.bookTrip(selectedTripForBooking.id, dropoffLabel, dropoffCoords);
@@ -646,28 +660,35 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                         )}
                       </div>
 
-                      {/* Explicit Departure Station with Driver GPS Highlight */}
+                      {/* First Station and Last Station for Passenger */}
                       {(() => {
                         const tripRoute = routes.find(r => r.id === trip.routeId);
-                        const departureStation = tripRoute?.stations?.[0];
-                        const isGpsStart = departureStation?.id.includes('gps') || (departureStation?.area && departureStation.area.includes('انطلاق السائق'));
+                        const passengerStations = (tripRoute?.stations || []).filter(
+                          st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+                        );
+                        const firstSt = passengerStations[0] || tripRoute?.stations?.[0];
+                        const lastSt = passengerStations[passengerStations.length - 1] || tripRoute?.stations?.[tripRoute.stations.length - 1];
 
-                        if (!departureStation) return null;
+                        if (!firstSt) return null;
                         return (
-                          <div className={`mb-3 p-2.5 rounded-xl border text-xs flex items-center justify-between gap-2 ${
-                            isGpsStart
-                              ? 'bg-emerald-950/40 border-emerald-800/70 text-emerald-300'
-                              : 'bg-slate-800/40 border-slate-700/50 text-slate-300'
-                          }`}>
-                            <div className="flex items-center gap-1.5 truncate">
-                              <MapPin className={`w-3.5 h-3.5 shrink-0 ${isGpsStart ? 'text-emerald-400' : 'text-sky-400'}`} />
-                              <span className="text-[11px] text-slate-400 shrink-0">محطة الانطلاق:</span>
-                              <span className="font-bold text-white truncate">{departureStation.nameAr}</span>
+                          <div className="mb-3 p-3 rounded-2xl bg-slate-800/60 border border-slate-700/60 text-xs space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 truncate">
+                                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
+                                <span className="text-[11px] text-slate-400 shrink-0">المحطة الأولى (الركوب):</span>
+                                <span className="font-bold text-white truncate">{firstSt.nameAr.split('(')[0]}</span>
+                              </div>
+                              <span className="text-[10px] text-emerald-400/90 font-medium shrink-0">{firstSt.area}</span>
                             </div>
-                            {isGpsStart && (
-                              <span className="shrink-0 text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-bold">
-                                موقع السائق (الانطلاق) 📍
-                              </span>
+                            {lastSt && lastSt.id !== firstSt.id && (
+                              <div className="flex items-center justify-between border-t border-slate-700/50 pt-2">
+                                <div className="flex items-center gap-2 truncate">
+                                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+                                  <span className="text-[11px] text-slate-400 shrink-0">المحطة الأخيرة (الوجهة):</span>
+                                  <span className="font-bold text-white truncate">{lastSt.nameAr.split('(')[0]}</span>
+                                </div>
+                                <span className="text-[10px] text-amber-400/90 font-medium shrink-0">{lastSt.area}</span>
+                              </div>
                             )}
                           </div>
                         );
@@ -1420,106 +1441,113 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                   </div>
                 </div>
 
-                {/* Visual Route Path Banner */}
-                {activeBookingRoute && (
-                  <div className="p-3 rounded-2xl bg-slate-800/90 border border-slate-700/80 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: selectedTripForBooking.routeColor }} />
-                        <span className="font-bold text-white">مسار الرحلة للحجز: {activeBookingRoute.nameAr}</span>
+                {/* Visual Route Path Banner: Display First Station and Last Station */}
+                {activeBookingRoute && (() => {
+                  const passengerStations = activeBookingRoute.stations.filter(
+                    st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+                  );
+                  const firstSt = passengerStations[0] || activeBookingRoute.stations[0];
+                  const lastSt = passengerStations[passengerStations.length - 1] || activeBookingRoute.stations[activeBookingRoute.stations.length - 1];
+
+                  return (
+                    <div className="p-3 rounded-2xl bg-slate-800/90 border border-slate-700/80 space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="w-3 h-3 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: selectedTripForBooking.routeColor }} />
+                          <span className="font-bold text-white">مسار الرحلة للركاب: {activeBookingRoute.nameAr}</span>
+                        </div>
+                        {selectedTripForBooking.status === 'in_progress' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] font-bold flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                            <span>رحلة جارية على الطريق 🟢</span>
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800 text-[10px] font-bold">
+                            رحلة مجدولة
+                          </span>
+                        )}
                       </div>
-                      {selectedTripForBooking.status === 'in_progress' ? (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] font-bold flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                          <span>رحلة جارية على الطريق 🟢</span>
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800 text-[10px] font-bold">
-                          رحلة مجدولة
-                        </span>
-                      )}
+
+                      {/* Explicit 2 stations only: First and Last */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                        {firstSt && (
+                          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-emerald-800/60 flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-emerald-500/20 text-emerald-400 font-black text-xs flex items-center justify-center shrink-0">1</span>
+                            <div className="truncate">
+                              <span className="text-[10px] text-slate-400 block">المحطة الأولى (محطة الركوب)</span>
+                              <span className="font-bold text-white text-xs truncate block">{firstSt.nameAr.split('(')[0]}</span>
+                              <span className="text-[10px] text-emerald-300 block">({firstSt.area})</span>
+                            </div>
+                          </div>
+                        )}
+                        {lastSt && lastSt.id !== firstSt?.id && (
+                          <div className="p-2.5 rounded-xl bg-slate-900/90 border border-amber-800/60 flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-lg bg-amber-500/20 text-amber-400 font-black text-xs flex items-center justify-center shrink-0">2</span>
+                            <div className="truncate">
+                              <span className="text-[10px] text-slate-400 block">المحطة الأخيرة (محطة النزول / الوجهة)</span>
+                              <span className="font-bold text-white text-xs truncate block">{lastSt.nameAr.split('(')[0]}</span>
+                              <span className="text-[10px] text-amber-300 block">({lastSt.area})</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    {activeBookingRoute.stations.length > 0 && (
-                      <div className="flex items-center gap-1 text-[11px] overflow-x-auto py-1">
-                        {activeBookingRoute.stations.map((st, sIdx) => (
-                          <span key={st.id} className="flex items-center gap-1 shrink-0">
-                            <span
+                  );
+                })()}
+
+                {/* Dropoff selection: Only passenger stations (First & Last) */}
+                <div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <label className="block text-xs font-bold text-white">
+                      اختر محطة النزول الخاصة بك:
+                    </label>
+                  </div>
+
+                  {/* Stations picker buttons - Strictly First and Last passenger stations */}
+                  {activeBookingRoute && (() => {
+                    const passengerStations = activeBookingRoute.stations.filter(
+                      st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+                    );
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                        {passengerStations.map((st, idx) => {
+                          const isSelected = selectedStation?.id === st.id && !customCoords;
+                          const isLast = idx === passengerStations.length - 1;
+                          return (
+                            <button
+                              key={st.id}
+                              type="button"
                               onClick={() => {
                                 setSelectedStation(st);
                                 setCustomDropoffName('');
                                 setCustomCoords(null);
                               }}
-                              className={`cursor-pointer px-2 py-0.5 rounded-lg text-[11px] font-bold transition-all ${
-                                selectedStation?.id === st.id && !customCoords
-                                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
-                                  : sIdx === 0
-                                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
-                                  : sIdx === activeBookingRoute.stations.length - 1
-                                  ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
-                                  : 'bg-slate-900 text-slate-300 border border-slate-700'
+                              className={`p-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-between border ${
+                                isSelected
+                                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                                  : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-750'
                               }`}
-                              title="اضغط لتحديد هذه المحطة كمحطة نزول"
                             >
-                              {st.nameAr.split('(')[0]}
-                            </span>
-                            {sIdx < activeBookingRoute.stations.length - 1 && (
-                              <ArrowLeft className="w-3 h-3 text-slate-500 shrink-0" />
-                            )}
-                          </span>
-                        ))}
+                              <div className="flex items-center gap-2 text-right truncate">
+                                <MapPin className={`w-4 h-4 shrink-0 ${isSelected ? 'text-slate-950' : 'text-amber-400'}`} />
+                                <div className="truncate">
+                                  <div className="font-black truncate">{st.nameAr.split('(')[0]}</div>
+                                  <div className={`text-[10px] ${isSelected ? 'text-slate-800' : 'text-slate-400'}`}>
+                                    {isLast ? 'المحطة الأخيرة (الوجهة النهائية)' : 'المحطة الأولى'} · {st.area}
+                                  </div>
+                                </div>
+                              </div>
+                              {isSelected && (
+                                <span className="text-[10px] bg-slate-950 text-amber-300 px-2 py-0.5 rounded-full font-black shrink-0">
+                                  محددة ✓
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
                       </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Dropoff selection rule: Select from route stations on map or click any point */}
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <label className="block text-xs font-bold text-white">
-                      اختر محطة النزول (اضغط من المسار أو اختر من القائمة):
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectNearestForBooking(activeBookingRoute || undefined)}
-                      disabled={isLocating}
-                      className="px-2.5 py-1 rounded-lg bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/30 text-[11px] font-bold flex items-center gap-1.5 transition-all shadow-sm"
-                    >
-                      <LocateFixed className={`w-3 h-3 text-sky-400 ${isLocating ? 'animate-spin' : ''}`} />
-                      <span>{isLocating ? 'جاري الفحص...' : 'أقرب محطة لموقعي'}</span>
-                    </button>
-                  </div>
-
-                  {nearestBookingNotification && (
-                    <div className="mb-2 p-2 px-3 rounded-xl bg-sky-950/90 border border-sky-700 text-xs text-sky-200 flex items-center gap-1.5 animate-in fade-in">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                      <span>{nearestBookingNotification}</span>
-                    </div>
-                  )}
-
-                  {/* Stations picker buttons */}
-                  {activeBookingRoute && (
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      {activeBookingRoute.stations.map(st => (
-                        <button
-                          key={st.id}
-                          type="button"
-                          onClick={() => {
-                            setSelectedStation(st);
-                            setCustomDropoffName('');
-                            setCustomCoords(null);
-                          }}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
-                            selectedStation?.id === st.id && !customCoords
-                              ? 'bg-amber-500 text-slate-950 font-bold shadow-md'
-                              : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                          }`}
-                        >
-                          <MapPin className="w-3 h-3" />
-                          <span>{st.nameAr}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Interactive Map for clicking any dropoff point on route */}
                   <div className="mb-3">
