@@ -395,7 +395,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       activeRouteGlowPolylineRef.current = null;
     }
 
-    if (trackedTrip && trackedTrip.status === 'in_progress') {
+    if (trackedTrip && trackedTrip.status !== 'completed' && trackedTrip.status !== 'cancelled') {
       const tripRoute = routes.find(r => r.id === trackedTrip.routeId);
       const points: [number, number][] = [];
 
@@ -454,7 +454,9 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
     // 2. Update Live Bus Markers with smooth motion ONLY upon real physical GPS displacement
     const existingKeys = new Set(busMarkersRef.current.keys());
 
-    activeTrips.forEach(trip => {
+    const busTrips = trips.filter(t => (t.status === 'in_progress' || t.id === trackedTripId) && t.status !== 'completed' && t.status !== 'cancelled');
+
+    busTrips.forEach(trip => {
       // Strictly do not render arbitrary fallback coordinates if trip has no physical GPS location yet
       if (!trip.currentLocation || typeof trip.currentLocation.lat !== 'number' || typeof trip.currentLocation.lng !== 'number') {
         return;
@@ -512,7 +514,7 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
       }
       lastBusMarkerCoordsRef.current.delete(tripId);
     });
-  }, [activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip, autoFollowDriver]);
+  }, [trips, activeTrips, trackedTripId, trackedTrip, routes, onSelectTrip, autoFollowDriver]);
 
   // Auto-pan map smoothly to follow tracked bus
   const handleCenterOnBus = () => {

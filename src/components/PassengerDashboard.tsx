@@ -25,7 +25,9 @@ import {
   Compass,
   Footprints,
   Sparkles,
-  Info
+  Info,
+  ArrowLeft,
+  Route
 } from 'lucide-react';
 import {
   requestUserLocation,
@@ -203,8 +205,8 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
     setCustomDropoffName('');
     setCustomCoords(null);
 
-    // Default to the first station in the route if available
-    const route = routes.find(r => r.id === trip.routeId);
+    // Default to the last station in the route if available
+    const route = transitStore.getRoutes().find(r => r.id === trip.routeId) || routes.find(r => r.id === trip.routeId);
     if (route && route.stations.length > 0) {
       setSelectedStation(route.stations[route.stations.length - 1]);
     } else {
@@ -280,7 +282,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
 
   // Get active route for the currently selected trip in booking modal
   const activeBookingRoute = selectedTripForBooking
-    ? routes.find(r => r.id === selectedTripForBooking.routeId)
+    ? (transitStore.getRoutes().find(r => r.id === selectedTripForBooking.routeId) || routes.find(r => r.id === selectedTripForBooking.routeId))
     : null;
 
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -731,7 +733,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                       </div>
 
                       {/* Remaining Seats Counter */}
-                      <div className="flex items-center justify-between text-xs mb-4">
+                      <div className="flex items-center justify-between text-xs mb-3">
                         <span className="text-slate-400">المقاعد المتبقية:</span>
                         <span
                           className={`font-black ${
@@ -741,6 +743,43 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                           {trip.availableSeats} من أصل {trip.totalSeats} مقعد
                         </span>
                       </div>
+
+                      {/* Complete Trip Route Stations Preview for Booking */}
+                      {(() => {
+                        const tripRoute = transitStore.getRoutes().find(r => r.id === trip.routeId) || routes.find(r => r.id === trip.routeId);
+                        if (!tripRoute || tripRoute.stations.length === 0) return null;
+                        const startSt = tripRoute.stations[0];
+                        const endSt = tripRoute.stations[tripRoute.stations.length - 1];
+                        return (
+                          <div className="mb-3 p-3 rounded-2xl bg-gradient-to-r from-slate-800/80 via-slate-800/40 to-slate-800/80 border border-slate-700/80 space-y-2 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[11px] font-bold text-sky-300 flex items-center gap-1.5">
+                                <Route className="w-3.5 h-3.5 text-sky-400" />
+                                <span>مسار الرحلة للحجز:</span>
+                              </span>
+                              <span className="text-[10px] text-slate-400 bg-slate-900 px-2 py-0.5 rounded-lg border border-slate-700 font-bold">
+                                {tripRoute.stations.length} محطات
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1 text-[11px] overflow-x-auto py-1">
+                              <span className="font-bold text-emerald-300 bg-emerald-950/70 border border-emerald-800/80 px-2 py-0.5 rounded-lg shrink-0">
+                                من: {startSt.nameAr.split('(')[0]}
+                              </span>
+                              <ArrowLeft className="w-3 h-3 text-amber-400 shrink-0" />
+                              {tripRoute.stations.length > 2 && (
+                                <span className="text-slate-400 text-[10px] shrink-0 bg-slate-900/90 border border-slate-700/60 px-1.5 py-0.5 rounded">
+                                  +{tripRoute.stations.length - 2} محطات وسطى
+                                </span>
+                              )}
+                              <ArrowLeft className="w-3 h-3 text-amber-400 shrink-0" />
+                              <span className="font-bold text-sky-300 bg-sky-950/70 border border-sky-800/80 px-2 py-0.5 rounded-lg shrink-0">
+                                إلى: {endSt.nameAr.split('(')[0]}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     {/* Live Bus Tracking Action Button */}
@@ -797,22 +836,22 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                       return (
                         <button
                           onClick={() => handleOpenBooking(trip)}
-                          disabled={isStarted || trip.availableSeats <= 0}
+                          disabled={trip.availableSeats <= 0}
                           className={`w-full py-2.5 rounded-xl font-bold text-xs transition-all shadow-md flex items-center justify-center gap-1.5 ${
-                            isStarted
-                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                              : trip.availableSeats <= 0
+                            trip.availableSeats <= 0
                               ? 'bg-rose-950 text-rose-400 cursor-not-allowed border border-rose-900'
+                              : isStarted
+                              ? 'bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400'
                               : 'bg-sky-600 hover:bg-sky-500 text-white shadow-sky-600/20'
                           }`}
                         >
                           <Ticket className="w-4 h-4" />
                           <span>
-                            {isStarted
-                              ? 'انطلقت الرحلة (لا يمكن الحجز)'
-                              : trip.availableSeats <= 0
+                            {trip.availableSeats <= 0
                               ? 'الرحلة ممتلئة بالكامل'
-                              : 'حجز مقعد الآن'}
+                              : isStarted
+                              ? 'حجز مقعد في هذه الرحلة (جارية الآن) 🟢'
+                              : 'حجز مقعد في هذه الرحلة'}
                           </span>
                         </button>
                       );
@@ -1381,6 +1420,58 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* Visual Route Path Banner */}
+                {activeBookingRoute && (
+                  <div className="p-3 rounded-2xl bg-slate-800/90 border border-slate-700/80 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full shrink-0 shadow-sm" style={{ backgroundColor: selectedTripForBooking.routeColor }} />
+                        <span className="font-bold text-white">مسار الرحلة للحجز: {activeBookingRoute.nameAr}</span>
+                      </div>
+                      {selectedTripForBooking.status === 'in_progress' ? (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-700 text-[10px] font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                          <span>رحلة جارية على الطريق 🟢</span>
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800 text-[10px] font-bold">
+                          رحلة مجدولة
+                        </span>
+                      )}
+                    </div>
+                    {activeBookingRoute.stations.length > 0 && (
+                      <div className="flex items-center gap-1 text-[11px] overflow-x-auto py-1">
+                        {activeBookingRoute.stations.map((st, sIdx) => (
+                          <span key={st.id} className="flex items-center gap-1 shrink-0">
+                            <span
+                              onClick={() => {
+                                setSelectedStation(st);
+                                setCustomDropoffName('');
+                                setCustomCoords(null);
+                              }}
+                              className={`cursor-pointer px-2 py-0.5 rounded-lg text-[11px] font-bold transition-all ${
+                                selectedStation?.id === st.id && !customCoords
+                                  ? 'bg-amber-500 text-slate-950 ring-2 ring-amber-300'
+                                  : sIdx === 0
+                                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+                                  : sIdx === activeBookingRoute.stations.length - 1
+                                  ? 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                                  : 'bg-slate-900 text-slate-300 border border-slate-700'
+                              }`}
+                              title="اضغط لتحديد هذه المحطة كمحطة نزول"
+                            >
+                              {st.nameAr.split('(')[0]}
+                            </span>
+                            {sIdx < activeBookingRoute.stations.length - 1 && (
+                              <ArrowLeft className="w-3 h-3 text-slate-500 shrink-0" />
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Dropoff selection rule: Select from route stations on map or click any point */}
                 <div>
                   <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -1434,6 +1525,8 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                   <div className="mb-3">
                     <AlAhsaMap
                       routes={activeBookingRoute ? [activeBookingRoute] : routes}
+                      trips={[selectedTripForBooking]}
+                      trackedTripId={selectedTripForBooking.id}
                       selectedStation={selectedStation}
                       userLocation={userCoords ? { lat: userCoords.lat, lng: userCoords.lng, label: 'موقعك الحالي' } : null}
                       nearestStationId={selectedStation?.id}

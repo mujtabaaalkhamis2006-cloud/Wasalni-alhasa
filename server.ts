@@ -492,13 +492,13 @@ app.post('/api/transit/driver-gps', (req: Request, res: Response) => {
       trip = serverTransitData.trips.find((t: any) => t.driverId === driverId && t.status === 'in_progress');
     }
 
-    if (trip) {
+    if (trip && trip.status !== 'completed' && trip.status !== 'cancelled') {
       trip.currentLocation = locData;
     }
 
     saveTransitDataToFile();
-    broadcastSseEvent('gps', { tripId, driverId, currentLocation: locData, tripUpdated: !!trip });
-    return res.json({ success: true, currentLocation: locData, tripUpdated: !!trip });
+    broadcastSseEvent('gps', { tripId, driverId, currentLocation: locData, tripUpdated: !!trip && trip.status !== 'completed' && trip.status !== 'cancelled' });
+    return res.json({ success: true, currentLocation: locData, tripUpdated: !!trip && trip.status !== 'completed' && trip.status !== 'cancelled' });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message });
   }
@@ -608,6 +608,55 @@ app.post('/api/transit/delete-trip', (req: Request, res: Response) => {
     return res.json({ success: true, tripId });
   } catch (err: any) {
     return res.status(500).json({ error: err?.message || 'Server error deleting trip' });
+  }
+});
+
+// Update Trip Status (finish / cancel / in_progress) with immediate cross-device broadcast
+app.post('/api/transit/trip-status', (req: Request, res: Response) => {
+  try {
+    const { tripId, status } = req.body;
+    if (!tripId || !status) {
+      return res.status(400).json({ error: 'Missing tripId or status' });
+    }
+    if (!serverTransitData) serverTransitData = getTransitData();
+    if (!Array.isArray(serverTransitData.trips)) serverTransitData.trips = [];
+
+    const trip = serverTransitData.trips.find((t: any) => t.id === tripId);
+    if (!trip) {
+      return res.status(404).json({ error: 'الرحلة غير موجودة' });
+    }
+
+    trip.status = status;
+
+    let boardedCount = 0;
+    let noShowCount = 0;
+
+    if (status === 'completed') {
+      (serverTransitData.bookings || []).forEach((b: any) => {
+        if (b.tripId === tripId) {
+          if (b.status === 'confirmed') {
+            b.status = 'no_show';
+            noShowCount++;
+          } else if (b.status === 'boarded') {
+            boardedCount++;
+          }
+        }
+      });
+    } else if (status === 'cancelled') {
+      (serverTransitData.bookings || []).forEach((b: any) => {
+        if (b.tripId === tripId && b.status !== 'boarded') {
+          b.status = 'cancelled';
+        }
+      });
+    }
+
+    saveTransitDataToFile();
+    broadcastSseEvent('trip:status', { tripId, status, boardedCount, noShowCount });
+    broadcastSseEvent('state', serverTransitData);
+
+    return res.json({ success: true, tripId, status, boardedCount, noShowCount });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Server error updating trip status' });
   }
 });
 
@@ -769,13 +818,25 @@ app.post('/api/transit/state', (req: Request, res: Response) => {
       });
       serverTransitData.trips = Array.from(tripMap.values());
 
-      // 4. Merge tickets
+      // 4. Merge stations
+      const stationMap = new Map();
+      (serverTransitData.stations || []).forEach((st: any) => stationMap.set(st.id, st));
+      (incomingData.stations || []).forEach((st: any) => stationMap.set(st.id, st));
+      serverTransitData.stations = Array.from(stationMap.values());
+
+      // 5. Merge routes
+      const routeMap = new Map();
+      (serverTransitData.routes || []).forEach((r: any) => routeMap.set(r.id, r));
+      (incomingData.routes || []).forEach((r: any) => routeMap.set(r.id, r));
+      serverTransitData.routes = Array.from(routeMap.values());
+
+      // 6. Merge tickets
       const ticketMap = new Map();
       (serverTransitData.tickets || []).forEach((tk: any) => ticketMap.set(tk.id, tk));
       (incomingData.tickets || []).forEach((tk: any) => ticketMap.set(tk.id, tk));
       serverTransitData.tickets = Array.from(ticketMap.values());
 
-      // 5. Merge passwords
+      // 7. Merge passwords
       serverTransitData.passwords = {
         ...(serverTransitData.passwords || {}),
         ...(incomingData.passwords || {})

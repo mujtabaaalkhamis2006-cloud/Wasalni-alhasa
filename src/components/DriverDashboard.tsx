@@ -215,9 +215,12 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       errorMessage: undefined
     }));
 
-    // Broadcast live telemetry
+    // Broadcast live telemetry only if trip is active
     if (activeTripId) {
-      transitStore.broadcastDriverGps(activeTripId, lat, lng, speedKmh, heading, accuracy, currentUser.id);
+      const trip = transitStore.getAllTrips().find((t: Trip) => t.id === activeTripId);
+      if (trip && trip.status === 'in_progress') {
+        transitStore.broadcastDriverGps(activeTripId, lat, lng, speedKmh, heading, accuracy, currentUser.id);
+      }
     }
   };
 
@@ -244,7 +247,10 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
 
         // If trip is in progress, broadcast immediately
         if (activeTripId) {
-          transitStore.broadcastDriverGps(activeTripId, loc.lat, loc.lng, 0, 0, loc.accuracy || 5, currentUser.id);
+          const trip = transitStore.getAllTrips().find((t: Trip) => t.id === activeTripId);
+          if (trip && trip.status === 'in_progress') {
+            transitStore.broadcastDriverGps(activeTripId, loc.lat, loc.lng, 0, 0, loc.accuracy || 5, currentUser.id);
+          }
         }
       } catch (err: any) {
         console.warn('Initial GPS acquisition:', err);

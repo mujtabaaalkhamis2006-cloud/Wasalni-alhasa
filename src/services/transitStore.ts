@@ -8,7 +8,8 @@ import {
   Announcement,
   AdminStats,
   UserRole,
-  ActivePresence
+  ActivePresence,
+  TripStatus
 } from '../types/transit';
 import {
   INITIAL_USERS,
@@ -380,9 +381,8 @@ class TransitStore {
           else if (topic === 'al-ahsa-transit/v5/gps') {
             if (payload.tripId && payload.currentLocation && payload.senderSessionId !== this.sessionId) {
               const trip = this.data.trips.find(t => t.id === payload.tripId);
-              if (trip) {
+              if (trip && trip.status !== 'completed' && trip.status !== 'cancelled') {
                 trip.currentLocation = payload.currentLocation;
-                if (trip.status !== 'in_progress') trip.status = 'in_progress';
                 this.notify();
               }
             }
@@ -628,9 +628,8 @@ class TransitStore {
       channel.on('broadcast', { event: 'driver_gps' }, ({ payload }: { payload: any }) => {
         if (payload?.tripId && payload?.currentLocation) {
           const trip = this.data.trips.find(t => t.id === payload.tripId);
-          if (trip) {
+          if (trip && trip.status !== 'completed' && trip.status !== 'cancelled') {
             trip.currentLocation = payload.currentLocation;
-            if (trip.status !== 'in_progress') trip.status = 'in_progress';
             this.notify();
           }
         }
@@ -927,14 +926,22 @@ class TransitStore {
         } catch {}
       });
 
+      this.sseEventSource.addEventListener('trip:status', (e: MessageEvent) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (payload?.tripId && payload?.status) {
+            this.applyRemoteTripStatus(payload.tripId, payload.status);
+          }
+        } catch {}
+      });
+
       this.sseEventSource.addEventListener('gps', (e: MessageEvent) => {
         try {
           const { tripId, currentLocation } = JSON.parse(e.data);
           if (tripId && currentLocation) {
             const trip = this.data.trips.find(t => t.id === tripId);
-            if (trip) {
+            if (trip && trip.status !== 'completed' && trip.status !== 'cancelled') {
               trip.currentLocation = currentLocation;
-              if (trip.status !== 'in_progress') trip.status = 'in_progress';
               this.notify();
             }
           }
@@ -999,6 +1006,29 @@ class TransitStore {
     if (!this.data.deletedTripIds.includes(tripId)) this.data.deletedTripIds.push(tripId);
     this.data.trips = this.data.trips.filter(t => t.id !== tripId);
     this.data.bookings = this.data.bookings.filter(b => b.tripId !== tripId);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
+    } catch {}
+    this.notify();
+  }
+
+  public applyRemoteTripStatus(tripId: string, status: TripStatus) {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return;
+    trip.status = status;
+    if (status === 'completed') {
+      this.data.bookings.forEach(b => {
+        if (b.tripId === tripId && b.status === 'confirmed') {
+          b.status = 'no_show';
+        }
+      });
+    } else if (status === 'cancelled') {
+      this.data.bookings.forEach(b => {
+        if (b.tripId === tripId && b.status !== 'boarded') {
+          b.status = 'cancelled';
+        }
+      });
+    }
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
     } catch {}
@@ -1108,11 +1138,8 @@ class TransitStore {
       lastUpdated: new Date().toISOString()
     };
 
-    if (trip) {
+    if (trip && trip.status !== 'completed' && trip.status !== 'cancelled') {
       trip.currentLocation = newLocation;
-      if (trip.status !== 'in_progress') {
-        trip.status = 'in_progress';
-      }
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
       } catch {}
@@ -1440,16 +1467,49 @@ class TransitStore {
           tripMap.set(t.id, t);
           hasChanges = true;
         } else {
+          // If existing is already cancelled or completed, preserve the terminal status!
+          const mergedStatus = (existing.status === 'cancelled' || existing.status === 'completed')
+            ? existing.status
+            : (t.status === 'cancelled' || t.status === 'completed' ? t.status : t.status);
           const existingTime = new Date(existing.currentLocation?.lastUpdated || 0).getTime();
           const serverTime = new Date(t.currentLocation?.lastUpdated || 0).getTime();
-          if (serverTime >= existingTime || existing.status !== t.status || existing.availableSeats !== t.availableSeats) {
-            tripMap.set(t.id, t);
+          const mergedLoc = serverTime >= existingTime ? (t.currentLocation || existing.currentLocation) : (existing.currentLocation || t.currentLocation);
+
+          if (existing.status !== mergedStatus || existing.availableSeats !== t.availableSeats || serverTime >= existingTime) {
+            tripMap.set(t.id, {
+              ...existing,
+              ...t,
+              status: mergedStatus,
+              currentLocation: mergedLoc
+            });
             hasChanges = true;
           }
         }
       }
     });
     const mergedTrips = Array.from(tripMap.values());
+
+    // Merge stations
+    const stationMap = new Map<string, TransitStation>();
+    this.data.stations.forEach(st => stationMap.set(st.id, st));
+    (serverData.stations || []).forEach(st => {
+      if (!stationMap.has(st.id)) {
+        hasChanges = true;
+      }
+      stationMap.set(st.id, st);
+    });
+    const mergedStations = Array.from(stationMap.values());
+
+    // Merge routes
+    const routeMap = new Map<string, TransitRoute>();
+    this.data.routes.forEach(r => routeMap.set(r.id, r));
+    (serverData.routes || []).forEach(r => {
+      if (!routeMap.has(r.id)) {
+        hasChanges = true;
+      }
+      routeMap.set(r.id, r);
+    });
+    const mergedRoutes = Array.from(routeMap.values());
 
     // Merge bookings - strictly omitting tombstoned bookings or deleted passengers/trips
     const bookingMap = new Map<string, Booking>();
@@ -1501,12 +1561,14 @@ class TransitStore {
       }
     }
 
-    if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length) {
+    if (hasChanges || this.data.users.length !== mergedUsers.length || this.data.trips.length !== mergedTrips.length || this.data.routes.length !== mergedRoutes.length) {
       this.data = {
         ...this.data,
         users: mergedUsers,
         passwords: mergedPasswords,
         trips: mergedTrips,
+        stations: mergedStations,
+        routes: mergedRoutes,
         bookings: mergedBookings,
         tickets: mergedTickets,
         announcement: mergedAnnouncement,
@@ -2073,18 +2135,12 @@ class TransitStore {
       return { success: false, error: 'الرحلة غير موجودة' };
     }
 
-    // Requirement: Check trip has not started & time has not passed
-    const nowTime = new Date().getTime();
-    const tripTime = new Date(trip.departureTime).getTime();
-    if (trip.status === 'in_progress') {
-      return { success: false, error: 'عذراً، انطلقت هذه الرحلة بالفعل ولا يمكن حجزها الآن' };
-    }
+    // Allow booking for both scheduled and ongoing active trips (الرحلة الموجودة)
     if (trip.status === 'completed' || trip.status === 'cancelled') {
-      return { success: false, error: 'هذه الرحلة ملغية أو منتهية' };
+      return { success: false, error: 'هذه الرحلة ملغية أو تم إنهاؤها' };
     }
-    if (tripTime < nowTime) {
-      return { success: false, error: 'فات موعد انطلاق هذه الرحلة' };
-    }
+
+    const tripTime = new Date(trip.departureTime).getTime();
 
     // Requirement: Check for another booking for this passenger within 1 hour difference
     const passengerExistingBookings = this.data.bookings.filter(
@@ -2536,8 +2592,11 @@ class TransitStore {
       return { success: false, error: 'فقط سائق الرحلة أو الإدارة يمكنه إنهاؤها' };
     }
 
-    if (trip.status !== 'in_progress') {
-      return { success: false, error: 'الرحلة ليست جارية لكي يتم إنهاؤها' };
+    if (trip.status === 'completed') {
+      return { success: false, error: 'تم إنهاء هذه الرحلة بالفعل' };
+    }
+    if (trip.status === 'cancelled') {
+      return { success: false, error: 'هذه الرحلة ملغية' };
     }
 
     trip.status = 'completed';
@@ -2558,6 +2617,15 @@ class TransitStore {
     });
 
     this.saveData(this.data);
+
+    // Call server endpoint directly for guaranteed immediate persistence and SSE distribution
+    try {
+      fetch(`${this.getApiBaseUrl()}/api/transit/trip-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId, status: 'completed' })
+      }).catch(() => {});
+    } catch {}
 
     // Explicit instant multi-carrier broadcast of trip completion to all connected devices & tabs
     this.publishMqtt('al-ahsa-transit/v5/trip-status', {
@@ -2597,6 +2665,10 @@ class TransitStore {
       return { success: false, error: 'فقط سائق هذه الرحلة أو الإدارة يمكنه إلغاؤها' };
     }
 
+    if (trip.status === 'cancelled') {
+      return { success: false, error: 'تم إلغاء هذه الرحلة بالفعل' };
+    }
+
     trip.status = 'cancelled';
 
     this.data.bookings.forEach(b => {
@@ -2606,6 +2678,15 @@ class TransitStore {
     });
 
     this.saveData(this.data);
+
+    // Call server endpoint directly for guaranteed immediate persistence and SSE distribution
+    try {
+      fetch(`${this.getApiBaseUrl()}/api/transit/trip-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tripId, status: 'cancelled' })
+      }).catch(() => {});
+    } catch {}
 
     this.publishMqtt('al-ahsa-transit/v5/trip-status', {
       tripId,
