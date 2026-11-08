@@ -219,25 +219,25 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
     }
   };
 
-  // Execute booking submission
+  // Execute booking submission: Fixed from First Station (Boarding) to Last Station (Dropoff)
   const handleConfirmBooking = () => {
     if (!selectedTripForBooking) return;
     setIsSubmittingBooking(true);
     setBookingError(null);
 
-    // Ensure passenger NEVER books to or from driver location
-    let dropoffLabel = customDropoffName.trim() || selectedStation?.nameAr || 'المحطة الأخيرة';
-    if (dropoffLabel.includes('السائق') || dropoffLabel.includes('gps')) {
-      const route = transitStore.getRoutes().find(r => r.id === selectedTripForBooking.routeId) || routes.find(r => r.id === selectedTripForBooking.routeId);
-      const passengerStations = (route?.stations || []).filter(
-        st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
-      );
-      dropoffLabel = passengerStations[passengerStations.length - 1]?.nameAr || 'المحطة الأخيرة';
-    }
+    const route = transitStore.getRoutes().find(r => r.id === selectedTripForBooking.routeId) || routes.find(r => r.id === selectedTripForBooking.routeId);
+    const passengerStations = (route?.stations || []).filter(
+      st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+    );
+    const stationsList = passengerStations.length >= 2 ? passengerStations : (route?.stations || []);
+    const firstSt = stationsList[0];
+    const lastSt = stationsList[stationsList.length - 1] || firstSt;
 
-    const dropoffCoords = customCoords || (selectedStation ? { lat: selectedStation.lat, lng: selectedStation.lng } : undefined);
+    const pickupLabel = firstSt ? firstSt.nameAr.split('(')[0].trim() : 'المحطة الأولى';
+    const dropoffLabel = lastSt ? lastSt.nameAr.split('(')[0].trim() : 'المحطة الأخيرة';
+    const dropoffCoords = lastSt ? { lat: lastSt.lat, lng: lastSt.lng } : undefined;
 
-    const result = transitStore.bookTrip(selectedTripForBooking.id, dropoffLabel, dropoffCoords);
+    const result = transitStore.bookTrip(selectedTripForBooking.id, dropoffLabel, dropoffCoords, pickupLabel);
     setIsSubmittingBooking(false);
 
     if (result.success && result.booking) {
@@ -975,13 +975,19 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                         </div>
                       </div>
 
-                      {/* Destination Station */}
-                      <div className="p-2.5 rounded-xl bg-slate-800/40 text-xs text-slate-300 mb-3 space-y-1">
-                        <div className="flex items-center gap-1.5 text-slate-400">
-                          <MapPin className="w-3.5 h-3.5 text-amber-400" />
-                          <span>محطة النزول المحددة:</span>
+                      {/* Trip Path: Boarding and Dropoff Stations */}
+                      <div className="p-2.5 rounded-xl bg-slate-800/40 text-xs text-slate-300 mb-3 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-emerald-400 font-bold flex items-center gap-1">
+                            <span>🟢 الصعود:</span>
+                            <span className="text-white">{b.pickupStation || 'المحطة الأولى'}</span>
+                          </span>
+                          <span className="text-slate-500">⬅</span>
+                          <span className="text-amber-400 font-bold flex items-center gap-1">
+                            <span>🔴 النزول:</span>
+                            <span className="text-white">{b.dropoffStation}</span>
+                          </span>
                         </div>
-                        <div className="font-bold text-white pr-5">{b.dropoffStation}</div>
                       </div>
 
                       {/* Driver info */}
@@ -1393,8 +1399,12 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                     <span className="text-base font-black text-sky-400">مقعد #{bookingSuccess.seatNumber}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-slate-400">محطة النزول:</span>
-                    <span className="font-bold text-white">{bookingSuccess.dropoffStation}</span>
+                    <span className="text-slate-400">محطة الصعود (الأولى):</span>
+                    <span className="font-bold text-emerald-400">{bookingSuccess.pickupStation || 'المحطة الأولى'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">محطة النزول (الأخيرة):</span>
+                    <span className="font-bold text-amber-400">{bookingSuccess.dropoffStation}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-slate-400">سعر التذكرة:</span>
@@ -1495,89 +1505,54 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                   );
                 })()}
 
-                {/* Dropoff selection: Only passenger stations (First & Last) */}
-                <div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <label className="block text-xs font-bold text-white">
-                      اختر محطة النزول الخاصة بك:
-                    </label>
+                {/* Fixed Route Banner: From First Station to Last Station */}
+                <div className="space-y-3">
+                  <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center gap-3">
+                    <span className="w-8 h-8 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 font-black text-sm">
+                      📍
+                    </span>
+                    <div>
+                      <span className="font-bold text-amber-300 text-xs block">
+                        مسار الحجز الإلزامي للرحلة
+                      </span>
+                      <p className="text-[11px] text-slate-300">
+                        يكون الحجز تلقائياً من <strong>المحطة الأولى (الصعود)</strong> إلى <strong>المحطة الأخيرة (النزول)</strong> لكافة الركاب دون الحاجة لاختيار محطات بينية.
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Stations picker buttons - Strictly First and Last passenger stations */}
-                  {activeBookingRoute && (() => {
-                    const passengerStations = activeBookingRoute.stations.filter(
-                      st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
-                    );
-                    return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-                        {passengerStations.map((st, idx) => {
-                          const isSelected = selectedStation?.id === st.id && !customCoords;
-                          const isLast = idx === passengerStations.length - 1;
-                          return (
-                            <button
-                              key={st.id}
-                              type="button"
-                              onClick={() => {
-                                setSelectedStation(st);
-                                setCustomDropoffName('');
-                                setCustomCoords(null);
-                              }}
-                              className={`p-3 rounded-2xl text-xs font-bold transition-all flex items-center justify-between border ${
-                                isSelected
-                                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                                  : 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-750'
-                              }`}
-                            >
-                              <div className="flex items-center gap-2 text-right truncate">
-                                <MapPin className={`w-4 h-4 shrink-0 ${isSelected ? 'text-slate-950' : 'text-amber-400'}`} />
-                                <div className="truncate">
-                                  <div className="font-black truncate">{st.nameAr.split('(')[0]}</div>
-                                  <div className={`text-[10px] ${isSelected ? 'text-slate-800' : 'text-slate-400'}`}>
-                                    {isLast ? 'المحطة الأخيرة (الوجهة النهائية)' : 'المحطة الأولى'} · {st.area}
-                                  </div>
-                                </div>
-                              </div>
-                              {isSelected && (
-                                <span className="text-[10px] bg-slate-950 text-amber-300 px-2 py-0.5 rounded-full font-black shrink-0">
-                                  محددة ✓
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-
-                  {/* Interactive Map for clicking any dropoff point on route */}
-                  <div className="mb-3">
+                  {/* Interactive Map preview of the route */}
+                  <div className="mb-2">
                     <AlAhsaMap
                       routes={activeBookingRoute ? [activeBookingRoute] : routes}
                       trips={[selectedTripForBooking]}
                       trackedTripId={selectedTripForBooking.id}
                       selectedStation={selectedStation}
                       userLocation={userCoords ? { lat: userCoords.lat, lng: userCoords.lng, label: 'موقعك الحالي' } : null}
-                      nearestStationId={selectedStation?.id}
-                      onSelectStation={st => {
-                        setSelectedStation(st);
-                        setCustomDropoffName('');
-                        setCustomCoords(null);
-                      }}
-                      onSelectCustomPoint={pt => {
-                        setCustomCoords({ lat: pt.lat, lng: pt.lng });
-                        setCustomDropoffName(pt.name);
-                        setSelectedStation(null);
-                      }}
                     />
                   </div>
 
-                  {/* Selected station feedback */}
-                  <div className="p-3 rounded-xl bg-slate-800/80 border border-slate-700 text-xs flex items-center justify-between">
-                    <span className="text-slate-400">محطة النزول المحددة:</span>
-                    <span className="font-bold text-amber-400">
-                      {customDropoffName || selectedStation?.nameAr || 'يرجى التحديد من المسار'}
-                    </span>
-                  </div>
+                  {/* Fixed summary feedback */}
+                  {activeBookingRoute && (() => {
+                    const passengerStations = activeBookingRoute.stations.filter(
+                      st => !st.id.includes('driver') && !st.id.includes('gps') && !st.nameAr.includes('السائق')
+                    );
+                    const stationsList = passengerStations.length >= 2 ? passengerStations : activeBookingRoute.stations;
+                    const firstSt = stationsList[0];
+                    const lastSt = stationsList[stationsList.length - 1] || firstSt;
+                    return (
+                      <div className="p-3.5 rounded-2xl bg-slate-900 border border-slate-800 text-xs flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-emerald-400 font-bold">🟢 الصعود: {firstSt ? firstSt.nameAr.split('(')[0] : 'المحطة الأولى'}</span>
+                          <span className="text-slate-500">⬅</span>
+                          <span className="text-amber-400 font-bold">🔴 النزول: {lastSt ? lastSt.nameAr.split('(')[0] : 'المحطة الأخيرة'}</span>
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-400">
+                          الأجرة: {selectedTripForBooking.price} ريال
+                        </span>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Verification alerts or errors */}

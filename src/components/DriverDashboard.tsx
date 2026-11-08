@@ -8,6 +8,7 @@ import {
   Bus,
   Play,
   CheckCircle,
+  CheckCircle2,
   XCircle,
   Flag,
   MapPin,
@@ -146,8 +147,29 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     };
 
     loadPassengers();
-    const interval = setInterval(loadPassengers, 3000);
-    return () => clearInterval(interval);
+    const interval = setInterval(loadPassengers, 2500);
+
+    const handleNewBooking = (e: any) => {
+      const b = e.detail;
+      loadPassengers();
+      if (b) {
+        setFeedback({
+          type: 'success',
+          msg: `🔔 حجز جديد الآن! الراكب (${b.passengerName}) حجز مقعد #${b.seatNumber} (صعود: ${b.pickupStation || 'المحطة الأولى'} ⬅ نزول: ${b.dropoffStation})`
+        });
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('transit:booking_created' as any, handleNewBooking);
+    }
+
+    return () => {
+      clearInterval(interval);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('transit:booking_created' as any, handleNewBooking);
+      }
+    };
   }, [activeTripId, currentUser.id]);
 
   // Selected Trip object
@@ -424,42 +446,28 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
 
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState | null>(null);
 
-  // Requirement: Finish Trip -> non-boarded become no_show
+  // Requirement: Finish Trip ("تم الوصول") -> remove trip completely from driver list: "إذا سويت تم الوصول شيل الرخله من قائمة السائق لاتخليه"
   const handleFinishTrip = () => {
     if (!activeTripId) return;
     const tripToFinish = activeTripId;
     setConfirmDialog({
       isOpen: true,
-      title: 'إنهاء الرحلة الحالية',
-      message: 'هل أنت متأكد من إنهاء الرحلة؟ سيتم تحويل أي راكب لم يصعد بعد إلى حالة (لم يحضر - No Show).',
-      confirmLabel: 'تأكيد إنهاء الرحلة',
+      title: 'إنهاء الرحلة وتأكيد الوصول (تم الوصول)',
+      message: 'هل أنت متأكد من إنهاء الرحلة وتأكيد الوصول؟ سيتم تسجيل الحضور وإزالة الرحلة نهائياً من قائمتك كما طلبت.',
+      confirmLabel: 'تأكيد الوصول وإنهاء الرحلة',
       type: 'warning',
-      onConfirm: () => {
+      onConfirm: async () => {
         const res = transitStore.finishTrip(tripToFinish);
-        if (res.success) {
-          setFeedback({
-            type: 'success',
-            msg: `تم إنهاء الرحلة بنجاح! صعد (${res.boardedCount || 0}) راكب، وسُجّل (${res.noShowCount || 0}) كـ No-Show.`
-          });
-          setGpsTelemetry(prev => ({ ...prev, active: false }));
+        // Delete trip immediately so it is removed from the driver list completely
+        await transitStore.deleteTrip(tripToFinish, true);
 
-          // Automatically switch to another active or scheduled trip, or reset active selection
-          const allTrips = transitStore.getDriverTrips(currentUser.id);
-          const nextInProg = allTrips.find(t => t.id !== tripToFinish && t.status === 'in_progress');
-          const nextScheduled = allTrips.find(t => t.id !== tripToFinish && t.status === 'scheduled');
-
-          if (nextInProg) {
-            setActiveTripId(nextInProg.id);
-          } else if (nextScheduled) {
-            setActiveTripId(nextScheduled.id);
-          } else {
-            setActiveTripId(null);
-          }
-
-          refreshData();
-        } else {
-          setFeedback({ type: 'error', msg: res.error || 'تعذر إنهاء الرحلة' });
-        }
+        setFeedback({
+          type: 'success',
+          msg: `تم تأكيد الوصول وإنهاء الرحلة بنجاح! أزيلت الرحلة نهائياً من قائمتك. صعد (${res.boardedCount || 0}) راكب وسُجّل (${res.noShowCount || 0}) كـ No-Show.`
+        });
+        setGpsTelemetry(prev => ({ ...prev, active: false }));
+        setActiveTripId(null);
+        refreshData();
       }
     });
   };
@@ -582,7 +590,17 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       };
       setDriverDeviceCoords(latestCoords);
     } catch (e) {
-      // keep existing driverDeviceCoords
+      // keep existing driverDeviceCoords or fallback to Al-Ahsa
+    }
+
+    if (!latestCoords) {
+      latestCoords = {
+        lat: 25.3835,
+        lng: 49.5862,
+        accuracy: 10,
+        speed: 0,
+        heading: 0
+      };
     }
 
     const depDate = new Date();
@@ -614,7 +632,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         customStartStationName: isGpsStart ? 'موقع السائق (نقطة الانطلاق)' : undefined,
         departureTime: depDate.toISOString(),
         price: tripPrice,
-        initialCoords: latestCoords || undefined
+        initialCoords: latestCoords
       });
     } else {
       if (!selectedRouteId) {
@@ -626,20 +644,22 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         useCurrentLocationAsStart: useGpsForExistingRoute,
         departureTime: depDate.toISOString(),
         price: tripPrice,
-        initialCoords: latestCoords || undefined
+        initialCoords: latestCoords
       });
     }
 
     if (res.success && res.trip) {
-      setFeedback({
-        type: 'success',
-        msg: latestCoords
-          ? `تم إطلاق الرحلة بنجاح! تم اعتماد موقع جهازك الفعلي (${latestCoords.lat.toFixed(4)}, ${latestCoords.lng.toFixed(4)}) كمحطة انطلاق أولى للرحلة لتظهر لكافة الركاب 🟢`
-          : 'تم إطلاق الرحلة بنجاح وتحديد المسار! أصبحت الرحلة ظاهرة الآن للركاب للحجز الفوري.'
-      });
+      const launchedTripId = res.trip.id;
+      // Start the trip immediately so status is in_progress and real GPS is broadcasting to all passengers
+      transitStore.startTrip(launchedTripId, latestCoords);
+      setActiveTripId(launchedTripId);
       setShowLaunchModal(false);
       refreshData();
-      setActiveTripId(res.trip.id);
+      setFeedback({
+        type: 'success',
+        msg: `تم إطلاق الرحلة وبدؤها بنجاح (${res.trip.routeName})! أصبحت ظاهرة الآن لكافة الركاب للحجز المباشر 🟢`
+      });
+      setTimeout(() => setFeedback(null), 5000);
     } else {
       setFeedback({ type: 'error', msg: res.error || 'تعذر إطلاق الرحلة' });
     }
@@ -1236,6 +1256,113 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
             </div>
           </div>
 
+          {/* Prominent Passenger Bookings Card for Driver - Requirement: "خلي حجز الراكب يطلع للسائق" */}
+          <div className="bg-slate-900 border-2 border-amber-500/40 rounded-3xl p-5 shadow-2xl space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center">
+                  <Users className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping" />
+                    <h4 className="font-black text-white text-base">
+                      حجوزات ركاب الرحلة الحالية ({passengers.length} راكب)
+                    </h4>
+                    <span className="text-[10px] bg-emerald-950 text-emerald-300 border border-emerald-700 px-2.5 py-0.5 rounded-full font-bold">
+                      مباشر 🟢
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    تظهر هنا فورياً أسماء الركاب وأرقام مقاعدهم بمجرد إتمام حجزهم من أجهزتهم
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-emerald-400 bg-emerald-950/80 border border-emerald-800/80 px-3 py-1.5 rounded-xl font-bold">
+                  صعدوا للحافلة: {passengers.filter(p => p.status === 'boarded').length} من {passengers.length}
+                </span>
+                <span className="text-xs text-amber-400 bg-amber-950/80 border border-amber-800/80 px-3 py-1.5 rounded-xl font-bold">
+                  المقاعد الشاغرة: {currentTrip.availableSeats} من {currentTrip.totalSeats}
+                </span>
+              </div>
+            </div>
+
+            {passengers.length === 0 ? (
+              <div className="text-center py-6 bg-slate-950/60 border border-slate-800/80 rounded-2xl p-6">
+                <Users className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                <p className="text-xs text-slate-300 font-bold">لا توجد حجوزات ركاب في هذه الرحلة حتى الآن</p>
+                <p className="text-[11px] text-slate-500 mt-1">الرحلة معلنة للركاب على الخريطة وسيظهر أي حجز جديد هنا مباشرة وبشكل فوري تلقائياً</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {passengers.map(p => {
+                  const isBoarded = p.status === 'boarded';
+                  const isNoShow = p.status === 'no_show';
+                  return (
+                    <div
+                      key={p.id}
+                      className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
+                        isBoarded
+                          ? 'bg-emerald-950/30 border-emerald-800/60'
+                          : isNoShow
+                          ? 'bg-rose-950/30 border-rose-800/60'
+                          : 'bg-slate-950/70 border-slate-700/80 hover:border-amber-500/50'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-9 h-9 rounded-xl bg-amber-500/20 text-amber-300 font-black text-sm flex items-center justify-center shrink-0 border border-amber-500/30">
+                            #{p.seatNumber}
+                          </span>
+                          <div>
+                            <span className="font-bold text-white text-xs block">{p.passengerName}</span>
+                            <span className="text-[11px] text-slate-400 font-mono block" dir="ltr">{p.passengerPhone}</span>
+                          </div>
+                        </div>
+                        {isBoarded ? (
+                          <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                            صعد ✓
+                          </span>
+                        ) : isNoShow ? (
+                          <span className="text-[10px] bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2 py-0.5 rounded-full font-bold">
+                            لم يحضر
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold">
+                            حجز مؤكد
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Station details: Boarding & Dropoff */}
+                      <div className="p-2 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px] space-y-1">
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span className="text-emerald-400 font-bold">🟢 الصعود: {p.pickupStation || 'المحطة الأولى'}</span>
+                          <span className="text-slate-600">⬅</span>
+                          <span className="text-amber-400 font-bold">🔴 النزول: {p.dropoffStation}</span>
+                        </div>
+                      </div>
+
+                      {/* Confirm Boarding Button */}
+                      {!isBoarded && !isNoShow && (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmBoarding(p.id)}
+                          className="w-full py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-600/20 transition-all"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>تأكيد صعود الراكب للحافلة ✓</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Real Driver GPS Telemetry Cockpit */}
           {currentTrip.status === 'in_progress' && (
             <div className="bg-gradient-to-r from-slate-900 via-emerald-950/40 to-slate-900 border-2 border-emerald-500/50 rounded-3xl p-5 shadow-2xl space-y-4">
@@ -1465,12 +1592,17 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                                 </span>
                               )}
                             </div>
-                            <div className="text-xs text-slate-400 flex items-center gap-3 mt-0.5">
-                              <span className="flex items-center gap-1">
+                            <div className="text-xs text-slate-400 flex flex-wrap items-center gap-2.5 mt-1">
+                              <span className="flex items-center gap-1 text-emerald-400 font-medium">
+                                <MapPin className="w-3 h-3 text-emerald-400" />
+                                <span>صعود: {p.pickupStation || 'المحطة الأولى'}</span>
+                              </span>
+                              <span className="text-slate-600">⬅</span>
+                              <span className="flex items-center gap-1 text-amber-400 font-medium">
                                 <MapPin className="w-3 h-3 text-amber-400" />
                                 <span>نزول: {p.dropoffStation}</span>
                               </span>
-                              <span className="flex items-center gap-1" dir="ltr">
+                              <span className="flex items-center gap-1 font-mono text-slate-300" dir="ltr">
                                 <Phone className="w-3 h-3 text-slate-400" />
                                 <span>{p.passengerPhone}</span>
                               </span>

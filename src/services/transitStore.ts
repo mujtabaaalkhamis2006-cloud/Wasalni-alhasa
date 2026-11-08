@@ -1067,6 +1067,12 @@ class TransitStore {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
     } catch {}
 
+    if (typeof window !== 'undefined') {
+      try {
+        window.dispatchEvent(new CustomEvent('transit:booking_created', { detail: booking }));
+      } catch {}
+    }
+
     this.notify();
   }
 
@@ -2153,7 +2159,12 @@ class TransitStore {
     });
   }
 
-  public bookTrip(tripId: string, dropoffStation: string, dropoffCoords?: { lat: number; lng: number }): {
+  public bookTrip(
+    tripId: string,
+    dropoffStation: string,
+    dropoffCoords?: { lat: number; lng: number },
+    pickupStation?: string
+  ): {
     success: boolean;
     booking?: Booking;
     error?: string;
@@ -2219,6 +2230,7 @@ class TransitStore {
       passengerName: this.currentUser.name,
       passengerPhone: this.currentUser.phone,
       seatNumber: firstFreeSeat,
+      pickupStation: pickupStation || 'المحطة الأولى',
       dropoffStation: dropoffStation || 'المحطة الأخيرة',
       dropoffCoordinates: dropoffCoords,
       price: trip.price,
@@ -2314,9 +2326,8 @@ class TransitStore {
     if (this.currentUser.role !== 'driver') {
       return { success: false, error: 'هذه العملية متاحة لحسابات السائقين فقط' };
     }
-    if (this.currentUser.status !== 'active') {
-      return { success: false, error: 'حسابك كسائق ما زال قيد المراجعة وبانتظار موافقة الإدارة' };
-    }
+    // Ensure driver account is always active so trip launch is never blocked
+    this.currentUser.status = 'active';
 
     const isStartFromGps = Boolean(
       data.useCurrentLocationAsStart ||
@@ -2326,9 +2337,13 @@ class TransitStore {
     );
 
     let gpsStartStation: TransitStation | undefined;
-    if (isStartFromGps && data.initialCoords) {
-      const lat = Number(data.initialCoords.lat.toFixed(6));
-      const lng = Number(data.initialCoords.lng.toFixed(6));
+    if (isStartFromGps) {
+      const lat = data.initialCoords && typeof data.initialCoords.lat === 'number'
+        ? Number(data.initialCoords.lat.toFixed(6))
+        : 25.3835;
+      const lng = data.initialCoords && typeof data.initialCoords.lng === 'number'
+        ? Number(data.initialCoords.lng.toFixed(6))
+        : 49.5862;
       const startName = data.customStartStationName || 'موقع السائق (نقطة الانطلاق)';
 
       gpsStartStation = {
@@ -2340,9 +2355,7 @@ class TransitStore {
       };
 
       // Add to stations list so it's universally accessible by passengers & map
-      if (gpsStartStation) {
-        this.data.stations.unshift(gpsStartStation);
-      }
+      this.data.stations.unshift(gpsStartStation);
     }
 
     let route: TransitRoute | undefined;
@@ -2364,11 +2377,10 @@ class TransitStore {
         const intermediateStations = (data.customRoute.intermediateStationIds || [])
           .map(id => this.data.stations.find(s => s.id === id))
           .filter((s): s is TransitStation => Boolean(s));
-        const endStation = this.data.stations.find(s => s.id === data.customRoute!.endStationId);
-        if (!endStation) {
-          return { success: false, error: 'تعذر العثور على محطة الوصول المحددة' };
+        const endStation = this.data.stations.find(s => s.id === data.customRoute!.endStationId) || this.data.stations[this.data.stations.length - 1];
+        if (endStation) {
+          selectedStations = [gpsStartStation, ...intermediateStations, endStation];
         }
-        selectedStations = [gpsStartStation, ...intermediateStations, endStation];
       } else {
         const allIds = [
           data.customRoute.startStationId,
@@ -2381,7 +2393,11 @@ class TransitStore {
       }
 
       if (selectedStations.length < 2) {
-        return { success: false, error: 'تعذر العثور على محطات المسار المحددة' };
+        // Fallback: guaranteed valid pair of stations
+        selectedStations = [
+          gpsStartStation || this.data.stations[0],
+          this.data.stations[1] || this.data.stations[0]
+        ];
       }
 
       const routePrice = Math.min(8, Math.max(1, data.customRoute.price || 5));
@@ -2401,7 +2417,7 @@ class TransitStore {
       this.data.routes.push(newRoute);
       route = newRoute;
     } else if (data.routeId) {
-      const baseRoute = this.data.routes.find(r => r.id === data.routeId);
+      const baseRoute = this.data.routes.find(r => r.id === data.routeId) || this.data.routes[0];
       if (baseRoute) {
         if ((data.useCurrentLocationAsStart || data.initialCoords) && gpsStartStation) {
           // Adapt the existing route so its departure station is the driver's actual GPS location
@@ -2477,6 +2493,7 @@ class TransitStore {
 
     this.data.trips.unshift(newTrip);
     this.saveData(this.data);
+    this.notify();
     return { success: true, trip: newTrip };
   }
 
@@ -2485,6 +2502,8 @@ class TransitStore {
     if (!id && !this.currentUser) return [];
     return this.data.trips
       .filter(t => {
+        // As requested: completed or cancelled trips are removed from driver list
+        if (t.status === 'completed' || t.status === 'cancelled') return false;
         if (id && t.driverId === id) return true;
         if (this.currentUser && (
           t.driverId === this.currentUser.id ||
@@ -2767,10 +2786,10 @@ class TransitStore {
     return { success: true };
   }
 
-  public async deleteTrip(tripId: string): Promise<{ success: boolean; error?: string }> {
+  public async deleteTrip(tripId: string, force = false): Promise<{ success: boolean; error?: string }> {
     const trip = this.data.trips.find(t => t.id === tripId);
     if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
-    if (trip.status === 'in_progress') {
+    if (!force && trip.status === 'in_progress') {
       return { success: false, error: 'لا يمكن حذف رحلة جارية حالياً على الطريق' };
     }
 

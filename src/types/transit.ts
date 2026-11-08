@@ -76,6 +76,7 @@ export interface Booking {
   passengerName: string;
   passengerPhone: string;
   seatNumber: number;
+  pickupStation?: string;
   dropoffStation: string;
   dropoffCoordinates?: {
     lat: number;
