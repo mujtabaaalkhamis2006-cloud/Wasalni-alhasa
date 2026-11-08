@@ -94,17 +94,17 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     const trips = transitStore.getDriverTrips(currentUser.id);
     setDriverTrips(trips);
 
-    // If activeTripId is not set, or points to completed/cancelled trip: prefer in_progress, then scheduled
+    // Active trips are strictly in_progress or scheduled
     const current = trips.find(t => t.id === activeTripId);
-    if (!activeTripId || (current && (current.status === 'completed' || current.status === 'cancelled'))) {
+    if (!current || current.status === 'completed' || current.status === 'cancelled') {
       const inProg = trips.find(t => t.status === 'in_progress');
       const scheduled = trips.find(t => t.status === 'scheduled');
       if (inProg) {
         setActiveTripId(inProg.id);
       } else if (scheduled) {
         setActiveTripId(scheduled.id);
-      } else if (!activeTripId && trips.length > 0) {
-        setActiveTripId(trips[0].id);
+      } else {
+        setActiveTripId(null);
       }
     }
   };
@@ -506,15 +506,51 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     });
   };
 
+  // Helper to format clean station label without parentheses
+  const formatStationLabel = (station?: TransitStation) => {
+    if (!station) return '';
+    return station.nameAr.split('(')[0].trim();
+  };
+
+  // Helper to generate route name following user requirement: 'من موقع السائق إلى المحطة الأولى إلى المحطة الأخيرة'
+  const generateRouteName = (startId: string, midId: string, endId: string, stationsList: TransitStation[]) => {
+    let startLabel = 'موقع السائق';
+    if (startId !== 'current_location') {
+      const st = stationsList.find(s => s.id === startId);
+      startLabel = st ? formatStationLabel(st) : 'موقع الانطلاق';
+    }
+
+    const midSt = stationsList.find(s => s.id === midId);
+    const midLabel = midSt ? formatStationLabel(midSt) : 'محطة القطار';
+
+    const endSt = stationsList.find(s => s.id === endId);
+    const endLabel = endSt ? formatStationLabel(endSt) : 'الكلية';
+
+    return `من ${startLabel} إلى ${midLabel} إلى ${endLabel}`;
+  };
+
   // Driver Launch Trip Modal State
   const [showLaunchModal, setShowLaunchModal] = useState(false);
   const [routeMode, setRouteMode] = useState<'custom' | 'existing'>('custom');
   const [allStations] = useState<TransitStation[]>(() => transitStore.getStations());
   const [customStartStationId, setCustomStartStationId] = useState('current_location');
-  const [customEndStationId, setCustomEndStationId] = useState(allStations[1]?.id || allStations[0]?.id || '');
+  const [customMidStationId, setCustomMidStationId] = useState(() => {
+    const list = transitStore.getStations();
+    const trainSt = list.find(s => s.id.includes('train') || s.nameAr.includes('قطار'));
+    return trainSt?.id || list[5]?.id || list[1]?.id || list[0]?.id || '';
+  });
+  const [customEndStationId, setCustomEndStationId] = useState(() => {
+    const list = transitStore.getStations();
+    const collegeSt = list.find(s => s.id.includes('college') || s.nameAr.includes('الكلية'));
+    return collegeSt?.id || list[0]?.id || list[1]?.id || '';
+  });
   const [customRouteName, setCustomRouteName] = useState(() => {
-    const endSt = allStations[1]?.nameAr.split('(')[0] || 'الوجهة';
-    return `من موقعي الفعلي إلى ${endSt}`;
+    const list = transitStore.getStations();
+    const trainSt = list.find(s => s.id.includes('train') || s.nameAr.includes('قطار'));
+    const collegeSt = list.find(s => s.id.includes('college') || s.nameAr.includes('الكلية'));
+    const midId = trainSt?.id || list[5]?.id || list[1]?.id || list[0]?.id || '';
+    const endId = collegeSt?.id || list[0]?.id || list[1]?.id || '';
+    return generateRouteName('current_location', midId, endId, list);
   });
   const [customRouteColor, setCustomRouteColor] = useState('#0284c7');
   const [selectedRouteId, setSelectedRouteId] = useState(routes[0]?.id || '');
@@ -560,7 +596,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         return;
       }
       if (!customStartStationId || !customEndStationId || (customStartStationId !== 'current_location' && customStartStationId === customEndStationId)) {
-        setFeedback({ type: 'error', msg: 'يرجى اختيار محطتي انطلاق ووصول مختلفتين' });
+        setFeedback({ type: 'error', msg: 'يرجى اختيار محطات مسار صحيحة ومختلفة' });
         return;
       }
       const isGpsStart = customStartStationId === 'current_location';
@@ -569,11 +605,13 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
           nameAr: customRouteName.trim(),
           startStationId: customStartStationId,
           endStationId: customEndStationId,
+          intermediateStationIds: customMidStationId ? [customMidStationId] : [],
           price: tripPrice,
           color: customRouteColor,
           useCurrentLocationAsStart: isGpsStart
         },
         useCurrentLocationAsStart: isGpsStart,
+        customStartStationName: isGpsStart ? 'موقع السائق (نقطة الانطلاق)' : undefined,
         departureTime: depDate.toISOString(),
         price: tripPrice,
         initialCoords: latestCoords || undefined
@@ -787,37 +825,51 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
 
             <form onSubmit={handleLaunchTrip} className="space-y-4">
               {routeMode === 'custom' ? (
-                /* Driver defines their own custom route! */
+                /* Driver defines their own custom route with 3 stations: Start -> Mid -> End */
                 <div className="space-y-3 bg-slate-800/40 p-4 rounded-2xl border border-slate-700/60">
                   <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1">اسم المسار الذي تريد قيادته *</label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-xs font-bold text-slate-200">اسم مسار الرحلة *</label>
+                      <button
+                        type="button"
+                        onClick={() => setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, customEndStationId, allStations))}
+                        className="text-[11px] text-amber-400 hover:text-amber-300 font-bold"
+                      >
+                        إعادة توليد التسمية ↺
+                      </button>
+                    </div>
                     <input
                       type="text"
                       required
-                      placeholder="مثال: خط جامعة الملك فيصل - سوق القيصرية"
+                      placeholder="مثال: من موقع السائق إلى محطة القطار إلى الكلية"
                       value={customRouteName}
                       onChange={e => setCustomRouteName(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                     />
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      صيغة المسار: موقع الانطلاق إلى المحطة الأولى إلى المحطة الأخيرة (مثال: من موقع السائق إلى محطة القطار إلى الكلية)
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1">محطة الانطلاق *</label>
+                  {/* 3-Station Selector Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {/* 1. Start Station */}
+                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-black">1</span>
+                        <label className="text-xs font-bold text-slate-200">موقع الانطلاق *</label>
+                      </div>
                       <select
                         value={customStartStationId}
                         onChange={e => {
                           const val = e.target.value;
                           setCustomStartStationId(val);
-                          if (val === 'current_location') {
-                            const endSt = allStations.find(s => s.id === customEndStationId);
-                            setCustomRouteName(`من موقعي الفعلي إلى ${endSt ? endSt.nameAr.split('(')[0] : 'الوجهة'}`);
-                          }
+                          setCustomRouteName(generateRouteName(val, customMidStationId, customEndStationId, allStations));
                         }}
                         className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                       >
                         <option value="current_location" className="text-emerald-400 font-bold">
-                          📍 موقعي الفعلي الحالي (GPS) {driverDeviceCoords ? `(${driverDeviceCoords.lat.toFixed(4)}, ${driverDeviceCoords.lng.toFixed(4)})` : ''}
+                          📍 موقع السائق (نقطة الانطلاق)
                         </option>
                         {allStations.map(st => (
                           <option key={st.id} value={st.id}>
@@ -825,27 +877,26 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           </option>
                         ))}
                       </select>
-                      {customStartStationId === 'current_location' && (
-                        <div className="mt-1.5 text-[10px] text-emerald-300 font-medium flex items-center gap-1">
-                          <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
-                          <span>ستكون محطة الانطلاق هي موقع جهازك الفعلي (GPS)</span>
-                        </div>
-                      )}
+                      <div className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
+                        <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
+                        <span>{customStartStationId === 'current_location' ? 'نقطة الانطلاق: موقع جهازك الفعلي' : 'محطة انطلاق محددة'}</span>
+                      </div>
                     </div>
 
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1">محطة الوصول *</label>
+                    {/* 2. First / Intermediate Station */}
+                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px] font-black">2</span>
+                        <label className="text-xs font-bold text-slate-200">المحطة الأولى / التالية *</label>
+                      </div>
                       <select
-                        value={customEndStationId}
+                        value={customMidStationId}
                         onChange={e => {
                           const val = e.target.value;
-                          setCustomEndStationId(val);
-                          if (customStartStationId === 'current_location') {
-                            const endSt = allStations.find(s => s.id === val);
-                            setCustomRouteName(`من موقعي الفعلي إلى ${endSt ? endSt.nameAr.split('(')[0] : 'الوجهة'}`);
-                          }
+                          setCustomMidStationId(val);
+                          setCustomRouteName(generateRouteName(customStartStationId, val, customEndStationId, allStations));
                         }}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                       >
                         {allStations.map(st => (
                           <option key={st.id} value={st.id}>
@@ -853,6 +904,35 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           </option>
                         ))}
                       </select>
+                      <div className="text-[10px] text-sky-300 font-medium">
+                        المحطة الوسيطة الأولى للركاب
+                      </div>
+                    </div>
+
+                    {/* 3. Final Destination */}
+                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-black">3</span>
+                        <label className="text-xs font-bold text-slate-200">المحطة الأخيرة / الوجهة *</label>
+                      </div>
+                      <select
+                        value={customEndStationId}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setCustomEndStationId(val);
+                          setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, val, allStations));
+                        }}
+                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                      >
+                        {allStations.map(st => (
+                          <option key={st.id} value={st.id}>
+                            {st.nameAr.split('(')[0]} ({st.area})
+                          </option>
+                        ))}
+                      </select>
+                      <div className="text-[10px] text-amber-300 font-medium">
+                        المحطة النهائية لوصول الرحلة
+                      </div>
                     </div>
                   </div>
 
@@ -1058,7 +1138,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                     onClick={handleManualBroadcastGps}
                     className="text-[11px] text-amber-400 hover:text-amber-300 underline font-medium"
                   >
-                    تحديث موقعي الفعلي 🔄
+                    تحديث موقع السائق (GPS) 🔄
                   </button>
                 </div>
               </div>
@@ -1073,7 +1153,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all disabled:opacity-50"
                 >
                   <Play className={`w-4 h-4 fill-current ${isAcquiringGps ? 'animate-spin' : ''}`} />
-                  <span>{isAcquiringGps ? 'جاري التقاط إحداثيات جهازك...' : 'بدء الرحلة من موقع جهازي الفعلي 🟢'}</span>
+                  <span>{isAcquiringGps ? 'جاري التقاط إحداثيات جهازك...' : 'بدء الرحلة من موقع السائق (الانطلاق) 🟢'}</span>
                 </button>
               )}
 
@@ -1096,12 +1176,17 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                   <span>إلغاء الرحلة ✕</span>
                 </button>
               ) : (
-                <button
-                  onClick={() => handleDeleteTrip(currentTrip.id, currentTrip.routeName)}
-                  className="px-4 py-2.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-700 text-rose-200 font-bold text-xs flex items-center gap-1.5 shadow-md transition-all"
-                >
-                  <span>حذف هذه الرحلة من السجل 🗑️</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-rose-400 font-bold bg-rose-950/70 border border-rose-800 px-3 py-1.5 rounded-xl">
+                    {currentTrip.status === 'cancelled' ? 'الرحلة ملغاة ولا تظهر للركاب' : 'الرحلة مكتملة'}
+                  </span>
+                  <button
+                    onClick={() => handleDeleteTrip(currentTrip.id, currentTrip.routeName)}
+                    className="px-4 py-2 rounded-xl bg-rose-950/80 hover:bg-rose-900 border border-rose-700 text-rose-200 font-bold text-xs flex items-center gap-1.5 shadow-md transition-all"
+                  >
+                    <span>حذف هذه الرحلة من السجل 🗑️</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>

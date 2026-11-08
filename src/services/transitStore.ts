@@ -2278,12 +2278,12 @@ class TransitStore {
     if (isStartFromGps && data.initialCoords) {
       const lat = Number(data.initialCoords.lat.toFixed(6));
       const lng = Number(data.initialCoords.lng.toFixed(6));
-      const startName = data.customStartStationName || `موقع السائق الفعلي (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      const startName = data.customStartStationName || 'موقع السائق (نقطة الانطلاق)';
 
       gpsStartStation = {
         id: `st-driver-gps-${Date.now()}`,
         nameAr: startName,
-        area: 'نقطة انطلاق السائق الفعلية (GPS)',
+        area: 'نقطة الانطلاق (موقع السائق)',
         lat,
         lng
       };
@@ -2344,7 +2344,7 @@ class TransitStore {
         color: data.customRoute.color || '#0284c7',
         price: routePrice,
         stations: selectedStations,
-        description: `مسار حدده الكابتن ${this.currentUser.name} من ${selectedStations[0].nameAr.split('(')[0]} إلى ${selectedStations[selectedStations.length - 1].nameAr.split('(')[0]}`
+        description: `مسار حدده الكابتن ${this.currentUser.name}: ${data.customRoute.nameAr.trim()}`
       };
 
       this.data.routes.push(newRoute);
@@ -2355,13 +2355,15 @@ class TransitStore {
         if ((data.useCurrentLocationAsStart || data.initialCoords) && gpsStartStation) {
           // Adapt the existing route so its departure station is the driver's actual GPS location
           const adaptedRouteId = `rt-drv-gps-${Date.now()}`;
+          const firstSt = baseRoute.stations[0]?.nameAr.split('(')[0].trim() || 'المحطة الأولى';
+          const lastSt = baseRoute.stations[baseRoute.stations.length - 1]?.nameAr.split('(')[0].trim() || 'المحطة الأخيرة';
           const adaptedRoute: TransitRoute = {
             ...baseRoute,
             id: adaptedRouteId,
             code: `${baseRoute.code}-GPS`,
-            nameAr: `${baseRoute.nameAr} (انطلاق من موقع السائق)`,
+            nameAr: `من موقع السائق إلى ${firstSt} إلى ${lastSt}`,
             stations: [gpsStartStation, ...baseRoute.stations.filter(s => s.id !== gpsStartStation!.id)],
-            description: `انطلاق من موقع السائق الفعلي (${gpsStartStation.lat.toFixed(4)}, ${gpsStartStation.lng.toFixed(4)}) - ${baseRoute.description}`
+            description: `انطلاق من موقع السائق إلى ${firstSt} إلى ${lastSt} - ${baseRoute.description}`
           };
           this.data.routes.push(adaptedRoute);
           route = adaptedRoute;
@@ -2481,7 +2483,7 @@ class TransitStore {
         if (route.stations[0].id.includes('gps')) {
           route.stations[0].lat = lat;
           route.stations[0].lng = lng;
-          route.stations[0].nameAr = `موقع السائق الفعلي (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+          route.stations[0].nameAr = 'موقع السائق (نقطة الانطلاق)';
         }
       }
     } else if (!trip.currentLocation) {
@@ -2666,7 +2668,7 @@ class TransitStore {
     }
 
     if (trip.status === 'cancelled') {
-      return { success: false, error: 'تم إلغاء هذه الرحلة بالفعل' };
+      return { success: true };
     }
 
     trip.status = 'cancelled';

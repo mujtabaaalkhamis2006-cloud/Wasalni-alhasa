@@ -666,7 +666,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                             </div>
                             {isGpsStart && (
                               <span className="shrink-0 text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-bold">
-                                موقع السائق الفعلي 📍
+                                موقع السائق (الانطلاق) 📍
                               </span>
                             )}
                           </div>
@@ -679,7 +679,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-black text-emerald-400 flex items-center gap-1.5">
                               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                              <span>موقع السائق الفعلي (GPS حي)</span>
+                              <span>موقع السائق المباشر (GPS حي)</span>
                             </span>
                             <span className="text-[11px] font-mono font-bold text-amber-300">
                               لوحة: {trip.busPlate}
@@ -793,7 +793,7 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                       }`}
                     >
                       <Navigation className={`w-3.5 h-3.5 ${isStarted ? 'text-slate-950 animate-spin' : 'text-sky-400'}`} />
-                      <span>{isStarted ? 'تتبع موقع السائق الفعلي على الخريطة مباشرة 🎯' : 'استعراض المسار وتتبع الحافلة 🗺️'}</span>
+                      <span>{isStarted ? 'تتبع موقع السائق المباشر على الخريطة 🎯' : 'استعراض المسار وتتبع الحافلة 🗺️'}</span>
                     </button>
 
                     {/* Book Action or Direct Cancel Action if already booked */}
