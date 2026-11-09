@@ -13,12 +13,14 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const isProduction =
-  process.env.NODE_ENV === 'production' ||
-  Boolean(process.env.K_SERVICE) ||
-  Boolean(process.env.PORT && process.env.PORT !== '3000') ||
-  (process.env.npm_lifecycle_event !== 'dev' && fs.existsSync(path.resolve(__dirname, 'dist', 'index.html')));
+  process.env.NODE_ENV === 'production' &&
+  process.env.npm_lifecycle_event !== 'dev';
 
-const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// Parse port: prioritize CLI argument --port, then fallback to 3000 in dev
+const portArgIndex = process.argv.indexOf('--port');
+const port = portArgIndex !== -1 && process.argv[portArgIndex + 1]
+  ? parseInt(process.argv[portArgIndex + 1], 10)
+  : (isProduction && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 
 app.use(express.json());
 
@@ -1224,7 +1226,10 @@ async function startServer() {
   } else {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR !== 'true' ? undefined : false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -1240,8 +1245,16 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`Server running at http://0.0.0.0:${port}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${port} is in use.`);
+    } else {
+      console.error('Server listen error:', err);
+    }
   });
 }
 
