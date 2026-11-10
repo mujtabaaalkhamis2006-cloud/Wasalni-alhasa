@@ -841,13 +841,13 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                               </span>
                             </div>
 
-                            {passengerTripBooking.status === 'confirmed' && !isStarted && (
+                            {passengerTripBooking.status === 'confirmed' && (
                               <button
                                 onClick={() => handleCancelBooking(passengerTripBooking.id)}
                                 className="w-full py-2 rounded-xl font-bold text-xs bg-rose-950/60 hover:bg-rose-900 border border-rose-800 text-rose-300 transition-all flex items-center justify-center gap-1.5 shadow-sm"
                               >
                                 <XCircle className="w-3.5 h-3.5 text-rose-400" />
-                                <span>إلغاء حجزك في هذه الرحلة</span>
+                                <span>إلغاء حجزك في هذه الرحلة ✕</span>
                               </button>
                             )}
                           </div>
@@ -926,6 +926,10 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                   boarded: {
                     label: 'تم تأكيد الصعود للحافلة ✓',
                     bg: 'bg-emerald-950/80 text-emerald-300 border-emerald-800'
+                  },
+                  dropped_off: {
+                    label: 'تم النزول واكتملت الرحلة ✓',
+                    bg: 'bg-teal-950/80 text-teal-300 border-teal-800'
                   },
                   no_show: {
                     label: 'لم يصعد (No Show)',
@@ -1011,16 +1015,43 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
                       )}
                     </div>
 
-                    {/* Cancel action if not started or boarded */}
-                    {b.status === 'confirmed' && trip?.status !== 'in_progress' && (
+                    {/* Cancel action for confirmed booking */}
+                    {b.status === 'confirmed' && (
                       <div className="mt-4 pt-3 border-t border-slate-800">
                         <button
                           onClick={() => handleCancelBooking(b.id)}
-                          className="w-full py-2 rounded-xl text-xs font-bold text-rose-400 hover:bg-rose-950/40 border border-rose-900/60 transition-colors flex items-center justify-center gap-1"
+                          className="w-full py-2.5 rounded-xl text-xs font-bold text-rose-300 hover:text-white bg-rose-950/70 hover:bg-rose-900 border border-rose-800 transition-all flex items-center justify-center gap-1.5 shadow-sm"
                         >
-                          <XCircle className="w-3.5 h-3.5" />
-                          <span>إلغاء هذا الحجز</span>
+                          <XCircle className="w-4 h-4 text-rose-400" />
+                          <span>إلغاء حجز هذا المقعد ✕</span>
                         </button>
+                      </div>
+                    )}
+
+                    {b.status === 'boarded' && (
+                      <div className="mt-4 pt-3 border-t border-slate-800 flex items-center justify-between">
+                        <span className="text-xs text-sky-400 font-bold flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4 text-sky-400" />
+                          <span>أنت على متن الحافلة حالياً 🚌</span>
+                        </span>
+                        {trip && (
+                          <button
+                            type="button"
+                            onClick={() => handleStartTracking(trip.id)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 text-sky-300 hover:text-white text-xs font-bold border border-slate-700"
+                          >
+                            تتبع الحافلة 📍
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {b.status === 'dropped_off' && (
+                      <div className="mt-4 pt-3 border-t border-slate-800">
+                        <div className="p-2.5 rounded-xl bg-teal-950/50 border border-teal-800/80 text-xs text-teal-300 font-bold flex items-center gap-2">
+                          <CheckCircle2 className="w-4 h-4 text-teal-400" />
+                          <span>تم نزولك من الحافلة ووصلت وجهتك بنجاح ✓</span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1225,18 +1256,40 @@ export const PassengerDashboard: React.FC<PassengerDashboardProps> = ({
               </div>
             )}
 
-            {/* Interactive Al-Ahsa Map with User Location Marker, tracked bus radar & connection line */}
-            <AlAhsaMap
-              routes={routes}
-              trips={trips}
-              interactive={true}
-              userLocation={userCoords ? { lat: userCoords.lat, lng: userCoords.lng, label: `موقع جهازك الفعلي 📍 (${userCoords.lat.toFixed(4)}, ${userCoords.lng.toFixed(4)})` } : null}
-              nearestStationId={nearestStationResult?.station.id}
-              selectedStation={mapSelectedStation}
-              onSelectStation={st => setMapSelectedStation(st)}
-              trackedTripId={trackedTripId}
-              onSelectTrip={t => setTrackedTripId(t.id)}
-            />
+            {/* Interactive Al-Ahsa Map: Displays ONLY the driver's tracked trip route as requested */}
+            {(() => {
+              const activeTrackedTrip = trips.find(t => t.id === trackedTripId) || trips.find(t => t.status === 'in_progress') || trips[0];
+              const singleTrackedRoute = activeTrackedTrip
+                ? (transitStore.getRoutes().find(r => r.id === activeTrackedTrip.routeId) || routes.find(r => r.id === activeTrackedTrip.routeId))
+                : null;
+              const routesForMap = singleTrackedRoute ? [singleTrackedRoute] : (routes.length > 0 ? [routes[0]] : []);
+              const tripsForMap = activeTrackedTrip ? [activeTrackedTrip] : (trips.length > 0 ? [trips[0]] : []);
+
+              return (
+                <div className="space-y-2">
+                  {singleTrackedRoute && (
+                    <div className="flex items-center justify-between text-xs px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: singleTrackedRoute.color }} />
+                        <span className="font-bold text-white">المسار المعروض في التتبع: {singleTrackedRoute.nameAr}</span>
+                      </div>
+                      <span className="text-[10px] text-amber-400 font-medium">مسار حافلة السائق الفعلي فقط 📍</span>
+                    </div>
+                  )}
+                  <AlAhsaMap
+                    routes={routesForMap}
+                    trips={tripsForMap}
+                    interactive={true}
+                    userLocation={userCoords ? { lat: userCoords.lat, lng: userCoords.lng, label: `موقع جهازك الفعلي 📍 (${userCoords.lat.toFixed(4)}, ${userCoords.lng.toFixed(4)})` } : null}
+                    nearestStationId={nearestStationResult?.station.id}
+                    selectedStation={mapSelectedStation}
+                    onSelectStation={st => setMapSelectedStation(st)}
+                    trackedTripId={activeTrackedTrip?.id || trackedTripId}
+                    onSelectTrip={t => setTrackedTripId(t.id)}
+                  />
+                </div>
+              );
+            })()}
           </div>
         );
       })()}

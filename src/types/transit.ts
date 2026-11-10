@@ -67,7 +67,7 @@ export interface Trip {
   currentLocation?: TripLocation;
 }
 
-export type BookingStatus = 'confirmed' | 'boarded' | 'no_show' | 'cancelled';
+export type BookingStatus = 'confirmed' | 'boarded' | 'dropped_off' | 'no_show' | 'cancelled';
 
 export interface Booking {
   id: string;
@@ -86,6 +86,7 @@ export interface Booking {
   status: BookingStatus;
   bookedAt: string;
   boardedAt?: string;
+  droppedOffAt?: string;
 }
 
 export interface SupportTicket {

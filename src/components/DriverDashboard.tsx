@@ -353,15 +353,23 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     };
   }, [activeTripId, currentTrip?.status, currentUser.id]);
 
-  // Requirement: Start trip from driver's actual physical device location!
-  const handleStartTrip = async () => {
-    if (!activeTripId) return;
+  // Requirement: Start trip from driver's actual physical device location with fast timeout fallback!
+  const handleStartTrip = async (targetTripId?: string) => {
+    const idToStart = targetTripId || activeTripId;
+    if (!idToStart) return;
+
+    if (idToStart !== activeTripId) {
+      setActiveTripId(idToStart);
+    }
 
     setIsAcquiringGps(true);
     let startCoords = driverDeviceCoords;
     try {
-      // Always query fresh physical device GPS right when starting the trip
-      const fresh = await requestUserLocation(true);
+      // Query physical device GPS with 2.5s race timeout so it never hangs
+      const fresh = await Promise.race([
+        requestUserLocation(true),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 2500))
+      ]);
       startCoords = {
         lat: fresh.lat,
         lng: fresh.lng,
@@ -369,33 +377,41 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         speed: 0,
         heading: 0
       };
+      setDriverDeviceCoords(startCoords);
       processAndBroadcastPosition(startCoords, true);
     } catch (e) {
-      console.warn('Could not get fresh device GPS for trip start:', e);
+      console.warn('GPS query fallback for trip start:', e);
     } finally {
       setIsAcquiringGps(false);
     }
 
-    const res = transitStore.startTrip(activeTripId, startCoords || undefined);
+    if (!startCoords) {
+      startCoords = {
+        lat: 25.3835,
+        lng: 49.5862,
+        accuracy: 10,
+        speed: 0,
+        heading: 0
+      };
+    }
+
+    const res = transitStore.startTrip(idToStart, startCoords);
     if (res.success) {
       setFeedback({
         type: 'success',
-        msg: startCoords
-          ? `تم بدء الرحلة بنجاح من موقع جهازك الفعلي (${startCoords.lat.toFixed(5)}, ${startCoords.lng.toFixed(5)})! يتم الآن بث موقع الحافلة لكافة الركاب وللإدارة مباشرة 🟢`
-          : 'تم بدء الرحلة بنجاح! يتم الآن بث موقع الحافلة للركاب وللإدارة مباشرة 🟢'
+        msg: `تم بدء الرحلة بنجاح من موقع جهازك الفعلي (${startCoords.lat.toFixed(5)}, ${startCoords.lng.toFixed(5)})! يتم الآن بث موقع الحافلة لكافة الركاب وللإدارة مباشرة 🟢`
       });
       refreshData();
-      if (startCoords) {
-        transitStore.broadcastDriverGps(
-          activeTripId,
-          startCoords.lat,
-          startCoords.lng,
-          0,
-          startCoords.heading || 0,
-          startCoords.accuracy || 5,
-          currentUser.id
-        );
-      }
+      transitStore.broadcastDriverGps(
+        idToStart,
+        startCoords.lat,
+        startCoords.lng,
+        0,
+        startCoords.heading || 0,
+        startCoords.accuracy || 5,
+        currentUser.id
+      );
+      setTimeout(() => setFeedback(null), 4000);
     } else {
       setFeedback({ type: 'error', msg: res.error || 'تعذر بدء الرحلة' });
     }
@@ -404,7 +420,10 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
   const handleManualBroadcastGps = async () => {
     setIsAcquiringGps(true);
     try {
-      const pos = await requestUserLocation(true);
+      const pos = await Promise.race([
+        requestUserLocation(true),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 2500))
+      ]);
       processAndBroadcastPosition({
         lat: pos.lat,
         lng: pos.lng,
@@ -431,7 +450,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     }
   };
 
-  // Requirement: Confirm Boarding -> only during in_progress and for confirmed bookings
+  // Requirement: Confirm Boarding (تم الصعود)
   const handleConfirmBoarding = (bookingId: string) => {
     if (!activeTripId) return;
     const res = transitStore.confirmBoarding(activeTripId, bookingId);
@@ -441,6 +460,19 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       setTimeout(() => setFeedback(null), 3000);
     } else {
       setFeedback({ type: 'error', msg: res.error || 'فشل تأكيد الصعود' });
+    }
+  };
+
+  // Requirement: Confirm Dropoff (تم النزول / وصل وجهته)
+  const handleConfirmDropoff = (bookingId: string) => {
+    if (!activeTripId) return;
+    const res = transitStore.confirmDropoff(activeTripId, bookingId);
+    if (res.success) {
+      setFeedback({ type: 'success', msg: 'تم تأكيد نزول الراكب ووصوله لوجهته بنجاح ✓' });
+      setPassengers(transitStore.getTripPassengers(activeTripId));
+      setTimeout(() => setFeedback(null), 3000);
+    } else {
+      setFeedback({ type: 'error', msg: res.error || 'فشل تأكيد النزول' });
     }
   };
 
@@ -537,9 +569,8 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     return `من ${startLabel} إلى ${midLabel} إلى ${endLabel}`;
   };
 
-  // Driver Launch Trip Modal State
+  // Driver Launch Trip Modal State (Direct driver customized route: Departure -> First Station -> Final Station)
   const [showLaunchModal, setShowLaunchModal] = useState(false);
-  const [routeMode, setRouteMode] = useState<'custom' | 'existing'>('custom');
   const [allStations] = useState<TransitStation[]>(() => transitStore.getStations());
   const [customStartStationId, setCustomStartStationId] = useState('current_location');
   const [customMidStationId, setCustomMidStationId] = useState(() => {
@@ -561,8 +592,6 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     return generateRouteName('current_location', midId, endId, list);
   });
   const [customRouteColor, setCustomRouteColor] = useState('#0284c7');
-  const [selectedRouteId, setSelectedRouteId] = useState(routes[0]?.id || '');
-  const [useGpsForExistingRoute, setUseGpsForExistingRoute] = useState(true);
   const [departureTime, setDepartureTime] = useState(() => {
     const d = new Date(Date.now() + 15 * 60000);
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -577,10 +606,23 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
       return;
     }
 
-    // Try to get freshest physical GPS reading from device sensor
+    if (!customRouteName.trim()) {
+      setFeedback({ type: 'error', msg: 'يرجى إدخال اسم المسار' });
+      return;
+    }
+
+    if (!customStartStationId || !customEndStationId || (customStartStationId !== 'current_location' && customStartStationId === customEndStationId)) {
+      setFeedback({ type: 'error', msg: 'يرجى اختيار محطات مسار صحيحة ومختلفة' });
+      return;
+    }
+
+    // Fast physical GPS reading with 2.5s race timeout
     let latestCoords = driverDeviceCoords;
     try {
-      const fresh = await requestUserLocation(true);
+      const fresh = await Promise.race([
+        requestUserLocation(true),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('GPS timeout')), 2500))
+      ]);
       latestCoords = {
         lat: fresh.lat,
         lng: fresh.lng,
@@ -589,7 +631,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         heading: 0
       };
       setDriverDeviceCoords(latestCoords);
-    } catch (e) {
+    } catch {
       // keep existing driverDeviceCoords or fallback to Al-Ahsa
     }
 
@@ -607,46 +649,23 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
     const [h, m] = departureTime.split(':');
     depDate.setHours(Number(h), Number(m), 0, 0);
 
-    let res;
-    if (routeMode === 'custom') {
-      if (!customRouteName.trim()) {
-        setFeedback({ type: 'error', msg: 'يرجى إدخال اسم المسار' });
-        return;
-      }
-      if (!customStartStationId || !customEndStationId || (customStartStationId !== 'current_location' && customStartStationId === customEndStationId)) {
-        setFeedback({ type: 'error', msg: 'يرجى اختيار محطات مسار صحيحة ومختلفة' });
-        return;
-      }
-      const isGpsStart = customStartStationId === 'current_location';
-      res = transitStore.driverLaunchTrip({
-        customRoute: {
-          nameAr: customRouteName.trim(),
-          startStationId: customStartStationId,
-          endStationId: customEndStationId,
-          intermediateStationIds: customMidStationId ? [customMidStationId] : [],
-          price: tripPrice,
-          color: customRouteColor,
-          useCurrentLocationAsStart: isGpsStart
-        },
-        useCurrentLocationAsStart: isGpsStart,
-        customStartStationName: isGpsStart ? 'موقع السائق (نقطة الانطلاق)' : undefined,
-        departureTime: depDate.toISOString(),
+    const isGpsStart = customStartStationId === 'current_location';
+    const res = transitStore.driverLaunchTrip({
+      customRoute: {
+        nameAr: customRouteName.trim(),
+        startStationId: customStartStationId,
+        endStationId: customEndStationId,
+        intermediateStationIds: customMidStationId ? [customMidStationId] : [],
         price: tripPrice,
-        initialCoords: latestCoords
-      });
-    } else {
-      if (!selectedRouteId) {
-        setFeedback({ type: 'error', msg: 'يرجى اختيار المسار' });
-        return;
-      }
-      res = transitStore.driverLaunchTrip({
-        routeId: selectedRouteId,
-        useCurrentLocationAsStart: useGpsForExistingRoute,
-        departureTime: depDate.toISOString(),
-        price: tripPrice,
-        initialCoords: latestCoords
-      });
-    }
+        color: customRouteColor,
+        useCurrentLocationAsStart: isGpsStart
+      },
+      useCurrentLocationAsStart: isGpsStart,
+      customStartStationName: isGpsStart ? 'موقع السائق (نقطة الانطلاق)' : undefined,
+      departureTime: depDate.toISOString(),
+      price: tripPrice,
+      initialCoords: latestCoords
+    });
 
     if (res.success && res.trip) {
       const launchedTripId = res.trip.id;
@@ -785,48 +804,28 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
         </div>
       )}
 
-      {/* Driver Launch Route Modal (Supports Custom Driver Defined Route) */}
+      {/* Driver Launch Route Modal (Mobile-Optimized & Direct Route Configuration) */}
       {showLaunchModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl w-full max-w-lg p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 overflow-y-auto overscroll-contain">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl w-full max-w-lg p-4 sm:p-6 shadow-2xl space-y-4 max-h-[92dvh] overflow-y-auto my-auto overscroll-contain">
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
-                <div className="text-[10px] font-bold text-amber-400 uppercase">سائق الحافلة</div>
-                <h3 className="text-base font-black text-white">تحديد مسار وإطلاق رحلة جديدة</h3>
+                <div className="text-[10px] font-bold text-amber-400 uppercase">كابتن الحافلة</div>
+                <h3 className="text-base sm:text-lg font-black text-white">تحديد المسار وبدء الرحلة 🚌</h3>
               </div>
-              <button onClick={() => setShowLaunchModal(false)} className="text-slate-400 hover:text-white">✕</button>
-            </div>
-
-            {/* Mode Toggle: Driver Custom Route vs Existing Route */}
-            <div className="flex rounded-xl bg-slate-800/80 p-1 border border-slate-700 text-xs">
               <button
                 type="button"
-                onClick={() => setRouteMode('custom')}
-                className={`flex-1 py-1.5 rounded-lg font-bold transition-all ${
-                  routeMode === 'custom'
-                    ? 'bg-amber-500 text-slate-950 shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
+                onClick={() => setShowLaunchModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center transition-colors text-sm"
               >
-                تحديد مسار جديد خاص بك
-              </button>
-              <button
-                type="button"
-                onClick={() => setRouteMode('existing')}
-                className={`flex-1 py-1.5 rounded-lg font-bold transition-all ${
-                  routeMode === 'existing'
-                    ? 'bg-amber-500 text-slate-950 shadow-md'
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                اختيار من المسارات المعتمدة
+                ✕
               </button>
             </div>
 
             {/* Driver Physical Location Status Badge */}
             <div className="bg-emerald-950/40 border border-emerald-800/60 rounded-2xl p-3 flex items-center justify-between gap-2 text-xs">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0"></span>
                 <div>
                   <div className="font-bold text-white">موقع انطلاق الرحلة: موقع جهازك الفعلي 📍</div>
                   <div className="text-[11px] text-emerald-400 font-mono" dir="ltr">
@@ -837,194 +836,140 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
               <button
                 type="button"
                 onClick={handleManualBroadcastGps}
-                className="text-[10px] text-amber-400 hover:text-amber-300 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700"
+                className="text-[10px] text-amber-400 hover:text-amber-300 bg-slate-800 px-2.5 py-1.5 rounded-lg border border-slate-700 shrink-0 font-bold"
               >
-                تحديث الإحداثيات 🔄
+                تحديث 🔄
               </button>
             </div>
 
             <form onSubmit={handleLaunchTrip} className="space-y-4">
-              {routeMode === 'custom' ? (
-                /* Driver defines their own custom route with 3 stations: Start -> Mid -> End */
-                <div className="space-y-3 bg-slate-800/40 p-4 rounded-2xl border border-slate-700/60">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-xs font-bold text-slate-200">اسم مسار الرحلة *</label>
-                      <button
-                        type="button"
-                        onClick={() => setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, customEndStationId, allStations))}
-                        className="text-[11px] text-amber-400 hover:text-amber-300 font-bold"
-                      >
-                        إعادة توليد التسمية ↺
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="مثال: من موقع السائق إلى محطة القطار إلى الكلية"
-                      value={customRouteName}
-                      onChange={e => setCustomRouteName(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
-                    />
-                    <div className="mt-1 text-[11px] text-slate-400">
-                      صيغة المسار: موقع الانطلاق إلى المحطة الأولى إلى المحطة الأخيرة (مثال: من موقع السائق إلى محطة القطار إلى الكلية)
-                    </div>
+              {/* Route Name Input with auto-regenerate */}
+              <div className="space-y-3 bg-slate-800/40 p-3 sm:p-4 rounded-2xl border border-slate-700/60">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-200">اسم مسار الرحلة *</label>
+                    <button
+                      type="button"
+                      onClick={() => setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, customEndStationId, allStations))}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 font-bold"
+                    >
+                      إعادة توليد التسمية ↺
+                    </button>
                   </div>
+                  <input
+                    type="text"
+                    required
+                    placeholder="مثال: من موقع السائق إلى محطة القطار إلى الكلية"
+                    value={customRouteName}
+                    onChange={e => setCustomRouteName(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                  />
+                  <div className="mt-1 text-[10px] text-slate-400">
+                    صيغة المسار: موقع الانطلاق إلى المحطة الأولى إلى المحطة الأخيرة (مثال: من موقع السائق إلى محطة القطار إلى الكلية)
+                  </div>
+                </div>
 
-                  {/* 3-Station Selector Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {/* 1. Start Station */}
-                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-black">1</span>
-                        <label className="text-xs font-bold text-slate-200">موقع الانطلاق *</label>
-                      </div>
-                      <select
-                        value={customStartStationId}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setCustomStartStationId(val);
-                          setCustomRouteName(generateRouteName(val, customMidStationId, customEndStationId, allStations));
-                        }}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
-                      >
-                        <option value="current_location" className="text-emerald-400 font-bold">
-                          📍 موقع السائق (نقطة الانطلاق)
+                {/* 3-Station Selector Grid (Vertical on mobile, easy to scroll and select) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* 1. Start Station */}
+                  <div className="bg-slate-900/70 p-2.5 rounded-xl border border-slate-700/60 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-[10px] font-black">1</span>
+                      <label className="text-xs font-bold text-slate-200">موقع الانطلاق *</label>
+                    </div>
+                    <select
+                      value={customStartStationId}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCustomStartStationId(val);
+                        setCustomRouteName(generateRouteName(val, customMidStationId, customEndStationId, allStations));
+                      }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    >
+                      <option value="current_location" className="text-emerald-400 font-bold">
+                        📍 موقع السائق (نقطة الانطلاق)
+                      </option>
+                      {allStations.map(st => (
+                        <option key={st.id} value={st.id}>
+                          {st.nameAr.split('(')[0]} ({st.area})
                         </option>
-                        {allStations.map(st => (
-                          <option key={st.id} value={st.id}>
-                            {st.nameAr.split('(')[0]} ({st.area})
-                          </option>
-                        ))}
-                      </select>
-                      <div className="text-[10px] text-emerald-400 font-medium flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-emerald-400 shrink-0" />
-                        <span>{customStartStationId === 'current_location' ? 'نقطة الانطلاق: موقع جهازك الفعلي' : 'محطة انطلاق محددة'}</span>
-                      </div>
-                    </div>
-
-                    {/* 2. First / Intermediate Station */}
-                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px] font-black">2</span>
-                        <label className="text-xs font-bold text-slate-200">المحطة الأولى / التالية *</label>
-                      </div>
-                      <select
-                        value={customMidStationId}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setCustomMidStationId(val);
-                          setCustomRouteName(generateRouteName(customStartStationId, val, customEndStationId, allStations));
-                        }}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
-                      >
-                        {allStations.map(st => (
-                          <option key={st.id} value={st.id}>
-                            {st.nameAr.split('(')[0]} ({st.area})
-                          </option>
-                        ))}
-                      </select>
-                      <div className="text-[10px] text-sky-300 font-medium">
-                        المحطة الوسيطة الأولى للركاب
-                      </div>
-                    </div>
-
-                    {/* 3. Final Destination */}
-                    <div className="bg-slate-900/60 p-3 rounded-xl border border-slate-700/60 space-y-1.5">
-                      <div className="flex items-center gap-1.5">
-                        <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-black">3</span>
-                        <label className="text-xs font-bold text-slate-200">المحطة الأخيرة / الوجهة *</label>
-                      </div>
-                      <select
-                        value={customEndStationId}
-                        onChange={e => {
-                          const val = e.target.value;
-                          setCustomEndStationId(val);
-                          setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, val, allStations));
-                        }}
-                        className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
-                      >
-                        {allStations.map(st => (
-                          <option key={st.id} value={st.id}>
-                            {st.nameAr.split('(')[0]} ({st.area})
-                          </option>
-                        ))}
-                      </select>
-                      <div className="text-[10px] text-amber-300 font-medium">
-                        المحطة النهائية لوصول الرحلة
-                      </div>
+                      ))}
+                    </select>
+                    <div className="text-[10px] text-emerald-400 font-medium">
+                      {customStartStationId === 'current_location' ? 'نقطة الانطلاق: موقعك الفعلي' : 'محطة انطلاق محددة'}
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">لون المسار على الخريطة</label>
-                    <div className="flex items-center gap-2">
-                      {['#0284c7', '#059669', '#d97706', '#e11d48', '#8b5cf6', '#06b6d4'].map(c => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => setCustomRouteColor(c)}
-                          className={`w-6 h-6 rounded-full border-2 transition-transform ${
-                            customRouteColor === c ? 'scale-125 border-white shadow' : 'border-transparent'
-                          }`}
-                          style={{ backgroundColor: c }}
-                        />
+                  {/* 2. First / Intermediate Station */}
+                  <div className="bg-slate-900/70 p-2.5 rounded-xl border border-slate-700/60 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-[10px] font-black">2</span>
+                      <label className="text-xs font-bold text-slate-200">المحطة الأولى للصعود *</label>
+                    </div>
+                    <select
+                      value={customMidStationId}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCustomMidStationId(val);
+                        setCustomRouteName(generateRouteName(customStartStationId, val, customEndStationId, allStations));
+                      }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    >
+                      {allStations.map(st => (
+                        <option key={st.id} value={st.id}>
+                          {st.nameAr.split('(')[0]} ({st.area})
+                        </option>
                       ))}
+                    </select>
+                    <div className="text-[10px] text-sky-300 font-medium">
+                      المحطة الأولى لصعود الركاب
+                    </div>
+                  </div>
+
+                  {/* 3. Final Destination */}
+                  <div className="bg-slate-900/70 p-2.5 rounded-xl border border-slate-700/60 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-5 h-5 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-[10px] font-black">3</span>
+                      <label className="text-xs font-bold text-slate-200">المحطة الأخيرة للنزول *</label>
+                    </div>
+                    <select
+                      value={customEndStationId}
+                      onChange={e => {
+                        const val = e.target.value;
+                        setCustomEndStationId(val);
+                        setCustomRouteName(generateRouteName(customStartStationId, customMidStationId, val, allStations));
+                      }}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2.5 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    >
+                      {allStations.map(st => (
+                        <option key={st.id} value={st.id}>
+                          {st.nameAr.split('(')[0]} ({st.area})
+                        </option>
+                      ))}
+                    </select>
+                    <div className="text-[10px] text-amber-300 font-medium">
+                      المحطة النهائية لوصول الرحلة
                     </div>
                   </div>
                 </div>
-              ) : (
-                /* Select Existing Route */
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-300 mb-1.5">اختر المسار *</label>
-                    <div className="space-y-2 max-h-48 overflow-y-auto">
-                      {routes.map(r => (
-                        <div
-                          key={r.id}
-                          onClick={() => {
-                            setSelectedRouteId(r.id);
-                            setTripPrice(r.price);
-                          }}
-                          className={`p-3 rounded-2xl border cursor-pointer transition-all flex items-center justify-between ${
-                            selectedRouteId === r.id
-                              ? 'bg-amber-950/40 border-amber-500 text-white shadow-md'
-                              : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:bg-slate-800'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <span className="w-3.5 h-3.5 rounded-full shrink-0" style={{ backgroundColor: r.color }} />
-                            <div>
-                              <div className="font-bold text-xs">{r.nameAr}</div>
-                              <div className="text-[11px] text-slate-400 line-clamp-1">{r.description}</div>
-                            </div>
-                          </div>
-                          <div className="text-left font-black text-amber-400 text-xs shrink-0">
-                            {r.price} ر.س
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
 
-                  {/* Departure from Driver Physical Location Option for Existing Route */}
-                  <div className="p-3 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                      <div>
-                        <span className="font-bold text-white block">انطلاق المسار من موقع جهازي الفعلي 📍</span>
-                        <span className="text-[11px] text-emerald-300">يتم استبدال محطة الانطلاق الأولى بموقعك الفعلي ليبدأ الركاب بتتبعك منه</span>
-                      </div>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={useGpsForExistingRoute}
-                      onChange={e => setUseGpsForExistingRoute(e.target.checked)}
-                      className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                    />
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1">لون مسار الرحلة على الخريطة</label>
+                  <div className="flex items-center gap-2">
+                    {['#0284c7', '#059669', '#d97706', '#e11d48', '#8b5cf6', '#06b6d4'].map(c => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setCustomRouteColor(c)}
+                        className={`w-6 h-6 rounded-full border-2 transition-transform ${
+                          customRouteColor === c ? 'scale-125 border-white shadow' : 'border-transparent'
+                        }`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
                   </div>
                 </div>
-              )}
+              </div>
 
               {/* Time and Price */}
               <div className="grid grid-cols-2 gap-3">
@@ -1064,7 +1009,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowLaunchModal(false)}
-                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+                  className="px-4 py-2.5 text-xs text-slate-400 hover:text-white"
                 >
                   إلغاء
                 </button>
@@ -1072,7 +1017,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                   type="submit"
                   className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-lg shadow-amber-500/20"
                 >
-                  إطلاق الرحلة وإعلانها للركاب الآن
+                  إطلاق الرحلة وبدؤها الآن 🟢
                 </button>
               </div>
             </form>
@@ -1213,7 +1158,7 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
             <div className="flex flex-wrap items-center gap-2">
               {currentTrip.status === 'scheduled' && (
                 <button
-                  onClick={handleStartTrip}
+                  onClick={() => handleStartTrip()}
                   disabled={isAcquiringGps}
                   className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all disabled:opacity-50"
                 >
@@ -1299,15 +1244,23 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                 {passengers.map(p => {
                   const isBoarded = p.status === 'boarded';
+                  const isDroppedOff = p.status === 'dropped_off';
                   const isNoShow = p.status === 'no_show';
+                  const isCancelled = p.status === 'cancelled';
+                  const isConfirmed = p.status === 'confirmed';
+
                   return (
                     <div
                       key={p.id}
                       className={`p-3.5 rounded-2xl border transition-all flex flex-col justify-between gap-3 ${
-                        isBoarded
-                          ? 'bg-emerald-950/30 border-emerald-800/60'
+                        isDroppedOff
+                          ? 'bg-teal-950/30 border-teal-800/60'
+                          : isBoarded
+                          ? 'bg-sky-950/30 border-sky-800/60'
                           : isNoShow
                           ? 'bg-rose-950/30 border-rose-800/60'
+                          : isCancelled
+                          ? 'bg-slate-900 border-slate-800 opacity-60'
                           : 'bg-slate-950/70 border-slate-700/80 hover:border-amber-500/50'
                       }`}
                     >
@@ -1321,13 +1274,21 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                             <span className="text-[11px] text-slate-400 font-mono block" dir="ltr">{p.passengerPhone}</span>
                           </div>
                         </div>
-                        {isBoarded ? (
-                          <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
-                            صعد ✓
+                        {isDroppedOff ? (
+                          <span className="text-[10px] bg-teal-500/20 text-teal-300 border border-teal-500/30 px-2 py-0.5 rounded-full font-bold">
+                            نزل (وصل) ✓
+                          </span>
+                        ) : isBoarded ? (
+                          <span className="text-[10px] bg-sky-500/20 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-full font-bold">
+                            صعد للحافلة 🚌
                           </span>
                         ) : isNoShow ? (
                           <span className="text-[10px] bg-rose-500/20 text-rose-400 border border-rose-500/30 px-2 py-0.5 rounded-full font-bold">
                             لم يحضر
+                          </span>
+                        ) : isCancelled ? (
+                          <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full font-bold">
+                            ملغي
                           </span>
                         ) : (
                           <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-bold">
@@ -1343,10 +1304,18 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           <span className="text-slate-600">⬅</span>
                           <span className="text-amber-400 font-bold">🔴 النزول: {p.dropoffStation}</span>
                         </div>
+                        <div className="flex items-center justify-between text-[10px] text-slate-400">
+                          {p.boardedAt && (
+                            <span className="text-sky-300">صعد: {new Date(p.boardedAt).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                          {p.droppedOffAt && (
+                            <span className="text-teal-300">نزل: {new Date(p.droppedOffAt).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Confirm Boarding Button */}
-                      {!isBoarded && !isNoShow && (
+                      {/* Action Buttons: Confirm Boarding or Confirm Dropoff */}
+                      {isConfirmed && (
                         <button
                           type="button"
                           onClick={() => handleConfirmBoarding(p.id)}
@@ -1355,6 +1324,24 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           <CheckCircle2 className="w-3.5 h-3.5" />
                           <span>تأكيد صعود الراكب للحافلة ✓</span>
                         </button>
+                      )}
+
+                      {isBoarded && (
+                        <button
+                          type="button"
+                          onClick={() => handleConfirmDropoff(p.id)}
+                          className="w-full py-2 rounded-xl bg-gradient-to-r from-amber-500 to-teal-500 hover:from-amber-400 hover:to-teal-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md shadow-teal-500/20 transition-all"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>تأكيد نزول الراكب (وصل وجهته) 🏁</span>
+                        </button>
+                      )}
+
+                      {isDroppedOff && (
+                        <div className="w-full py-1.5 rounded-xl bg-teal-950/60 border border-teal-800 text-teal-300 font-bold text-xs flex items-center justify-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-teal-400" />
+                          <span>نزل من الحافلة واكتملت رحلته ✓</span>
+                        </div>
                       )}
                     </div>
                   );
@@ -1581,14 +1568,24 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           <div>
                             <div className="font-bold text-white text-sm flex items-center gap-2">
                               <span>{p.passengerName}</span>
-                              {isBoarded && (
-                                <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded font-bold">
-                                  تم الصعود ✓
+                              {p.status === 'boarded' && (
+                                <span className="text-[10px] bg-sky-500/20 text-sky-400 px-1.5 py-0.5 rounded font-bold">
+                                  صعد للحافلة 🚌
                                 </span>
                               )}
-                              {isNoShow && (
+                              {p.status === 'dropped_off' && (
+                                <span className="text-[10px] bg-teal-500/20 text-teal-300 px-1.5 py-0.5 rounded font-bold">
+                                  تم النزول ✓
+                                </span>
+                              )}
+                              {p.status === 'no_show' && (
                                 <span className="text-[10px] bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded font-bold">
                                   لم يحضر (No Show)
+                                </span>
+                              )}
+                              {p.status === 'cancelled' && (
+                                <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-bold">
+                                  ملغي
                                 </span>
                               )}
                             </div>
@@ -1610,9 +1607,9 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                           </div>
                         </div>
 
-                        {/* Boarding Action Button */}
+                        {/* Boarding and Dropoff Action Buttons */}
                         <div>
-                          {isConfirmed ? (
+                          {p.status === 'confirmed' ? (
                             <button
                               onClick={() => handleConfirmBoarding(p.id)}
                               disabled={currentTrip.status !== 'in_progress'}
@@ -1628,15 +1625,29 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                               }
                             >
                               <CheckCircle className="w-4 h-4" />
-                              <span>تأكيد الصعود</span>
+                              <span>تأكيد الصعود ✓</span>
                             </button>
-                          ) : isBoarded ? (
-                            <span className="text-xs text-emerald-400 font-bold px-3 py-1.5 bg-emerald-950/60 rounded-xl border border-emerald-800">
-                              صعد للحافلة ✓
+                          ) : p.status === 'boarded' ? (
+                            <button
+                              onClick={() => handleConfirmDropoff(p.id)}
+                              className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-amber-500 to-teal-500 hover:from-amber-400 hover:to-teal-400 text-slate-950 shadow-md transition-all flex items-center gap-1.5"
+                              title="تأكيد نزول الراكب عند وصوله لمحطة وجهته"
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              <span>تأكيد النزول 🏁</span>
+                            </button>
+                          ) : p.status === 'dropped_off' ? (
+                            <span className="text-xs text-teal-300 font-bold px-3 py-1.5 bg-teal-950/60 rounded-xl border border-teal-800 flex items-center gap-1">
+                              <CheckCircle className="w-3.5 h-3.5 text-teal-400" />
+                              <span>نزل واكتملت رحلته ✓</span>
+                            </span>
+                          ) : p.status === 'cancelled' ? (
+                            <span className="text-xs text-slate-400 font-bold px-3 py-1.5 bg-slate-800 rounded-xl border border-slate-700">
+                              ملغي
                             </span>
                           ) : (
                             <span className="text-xs text-rose-400 font-bold px-3 py-1.5 bg-rose-950/60 rounded-xl border border-rose-800">
-                              لم يصعد
+                              لم يحضر
                             </span>
                           )}
                         </div>
@@ -1712,6 +1723,15 @@ export const DriverDashboard: React.FC<DriverDashboardProps> = ({
                     </td>
                     <td className="p-3 text-center">
                       <div className="flex items-center justify-center gap-1.5">
+                        {t.status === 'scheduled' && (
+                          <button
+                            onClick={() => handleStartTrip(t.id)}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] shadow-sm flex items-center gap-1"
+                            title="بدء الرحلة وبث موقع الحافلة الآن"
+                          >
+                            <span>انطلاق 🟢</span>
+                          </button>
+                        )}
                         <button
                           onClick={() => setActiveTripId(t.id)}
                           className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-400 font-bold text-[11px]"

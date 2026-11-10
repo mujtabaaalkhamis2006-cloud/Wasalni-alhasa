@@ -2283,11 +2283,11 @@ class TransitStore {
     }
 
     const trip = this.data.trips.find(t => t.id === booking.tripId);
-    if (trip && trip.status === 'in_progress') {
-      return { success: false, error: 'لا يمكن إلغاء الحجز لرحلة جارية بالفعل' };
+    if (booking.status === 'dropped_off') {
+      return { success: false, error: 'تم إنهاء رحلة الراكب والنزول بالفعل' };
     }
-    if (booking.status === 'boarded') {
-      return { success: false, error: 'تم صعود الحافلة بالفعل ولا يمكن الإلغاء' };
+    if (booking.status === 'cancelled') {
+      return { success: false, error: 'هذا الحجز ملغي مسبقاً' };
     }
 
     booking.status = 'cancelled';
@@ -2655,6 +2655,30 @@ class TransitStore {
     return { success: true };
   }
 
+  // Requirement: Confirm Dropoff (تم النزول / وصل وجهته)
+  public confirmDropoff(tripId: string, bookingId: string): { success: boolean; error?: string } {
+    const trip = this.data.trips.find(t => t.id === tripId);
+    if (!trip) return { success: false, error: 'الرحلة غير موجودة' };
+
+    // Security: Restricted to assigned driver
+    if (this.currentUser && this.currentUser.role === 'driver' && trip.driverId !== this.currentUser.id) {
+      return { success: false, error: 'تأكيد النزول مقصور على سائق الرحلة نفسه' };
+    }
+
+    const booking = this.data.bookings.find(b => b.id === bookingId && b.tripId === tripId);
+    if (!booking) return { success: false, error: 'بيانات الحجز غير موجودة في هذه الرحلة' };
+
+    if (booking.status !== 'boarded' && booking.status !== 'confirmed') {
+      return { success: false, error: `لا يمكن تأكيد النزول لحجز بحالة (${booking.status})` };
+    }
+
+    booking.status = 'dropped_off';
+    booking.droppedOffAt = new Date().toISOString();
+
+    this.saveData(this.data);
+    return { success: true };
+  }
+
   // Requirement: Finish Trip -> non-boarded passengers become no_show
   public finishTrip(tripId: string): { success: boolean; error?: string; boardedCount?: number; noShowCount?: number } {
     const trip = this.data.trips.find(t => t.id === tripId);
@@ -2682,7 +2706,7 @@ class TransitStore {
         if (b.status === 'confirmed') {
           b.status = 'no_show';
           noShowCount++;
-        } else if (b.status === 'boarded') {
+        } else if (b.status === 'boarded' || b.status === 'dropped_off') {
           boardedCount++;
         }
       }

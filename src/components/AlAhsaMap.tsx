@@ -181,9 +181,11 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
   const lastPannedCoordsRef = useRef<{ lat: number; lng: number } | null>(null);
   const lastBusMarkerCoordsRef = useRef<Map<string, { lat: number; lng: number }>>(new Map());
 
-  const displayedRoutes = routes.filter(r => filterRouteId === 'all' || r.id === filterRouteId);
   const activeTrips = trips.filter(t => t.status === 'in_progress');
-  const trackedTrip = trips.find(t => t.id === trackedTripId) || activeTrips[0];
+  const trackedTrip = trips.find(t => t.id === trackedTripId) || (trackedTripId ? null : activeTrips[0]);
+  const displayedRoutes = trackedTrip
+    ? routes.filter(r => r.id === trackedTrip.routeId)
+    : routes.filter(r => filterRouteId === 'all' || r.id === filterRouteId);
 
   const [autoFollowDriver, setAutoFollowDriver] = useState<boolean>(true);
 
@@ -560,8 +562,8 @@ export const AlAhsaMap: React.FC<AlAhsaMapProps> = ({
           </div>
         </div>
 
-        {/* Route switcher tabs */}
-        {!isDriverView && (
+        {/* Route switcher tabs - hidden when tracking a specific trip */}
+        {!isDriverView && !trackedTripId && routes.length > 1 && (
           <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-800/80 rounded-xl border border-slate-700/60">
             <button
               onClick={() => setFilterRouteId('all')}
